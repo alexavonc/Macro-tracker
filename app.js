@@ -50,6 +50,160 @@ function calcCals(protein, carbs, fat) {
 // ─── Default goals ────────────────────────────────────────────────────────────
 const DEFAULT_GOALS = { protein: 150, carbs: 200, fat: 65, calories: 2000 };
 
+// ─── Pet system ───────────────────────────────────────────────────────────────
+function injectPetStyles() {
+  if (document.getElementById('macro-pet-css')) return;
+  const s = document.createElement('style');
+  s.id = 'macro-pet-css';
+  s.textContent = `
+    @keyframes petBreathe { 0%,100%{transform:scaleY(1)} 50%{transform:scaleY(1.05)} }
+    @keyframes tailIdle   { 0%,100%{transform:rotate(-8deg)} 50%{transform:rotate(8deg)} }
+    @keyframes tailSad    { 0%,100%{transform:rotate(-4deg) translateY(5px)} 50%{transform:rotate(4deg) translateY(5px)} }
+    @keyframes tailHappy  { 0%,100%{transform:rotate(-26deg)} 50%{transform:rotate(26deg)} }
+    @keyframes petBlink   { 0%,87%,100%{transform:scaleY(1)} 90%{transform:scaleY(0.05)} 93%{transform:scaleY(1)} }
+    @keyframes petDroop   { 0%,100%{transform:translateY(0)} 50%{transform:translateY(5px)} }
+    @keyframes petBounce  { 0%,100%{transform:translateY(0)} 45%{transform:translateY(-14px)} }
+    @keyframes sparkleAnim{ 0%,100%{opacity:0;transform:scale(0) rotate(0deg)} 50%{opacity:1;transform:scale(1) rotate(45deg)} }
+    @keyframes petGlow    { 0%,100%{filter:drop-shadow(0 0 8px #FFD700) drop-shadow(0 0 16px rgba(255,165,0,.5))} 50%{filter:drop-shadow(0 0 26px #FFD700) drop-shadow(0 0 52px rgba(255,165,0,.8))} }
+  `;
+  document.head.appendChild(s);
+}
+
+function catSVG(state, size) {
+  const hungry = state === 'hungry';
+  const happy  = state === 'happy';
+  const evolve = state === 'evolve';
+  const eating = happy || evolve;
+
+  const bodyAnim = eating
+    ? 'animation:petBounce .45s ease-in-out infinite;transform-origin:50px 86px;'
+    : hungry
+    ? 'animation:petDroop 4s ease-in-out infinite;'
+    : 'animation:petBreathe 3.5s ease-in-out infinite;transform-origin:50px 86px;';
+
+  const tailAnim = eating
+    ? 'transform-box:fill-box;transform-origin:100% 100%;animation:tailHappy .35s ease-in-out infinite;'
+    : hungry
+    ? 'transform-box:fill-box;transform-origin:100% 100%;animation:tailSad 4s ease-in-out infinite;'
+    : 'transform-box:fill-box;transform-origin:100% 100%;animation:tailIdle 2.5s ease-in-out infinite;';
+
+  const eyes = eating ? `
+    <path d="M30,46 Q38,38 46,46" stroke="#2C1810" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+    <path d="M54,46 Q62,38 70,46" stroke="#2C1810" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  ` : hungry ? `
+    <ellipse cx="38" cy="46" rx="8" ry="7" fill="#2C1810"/>
+    <ellipse cx="38" cy="46" rx="5.5" ry="5" fill="#7A3B12"/>
+    <circle cx="40.5" cy="43" r="2" fill="white"/>
+    <path d="M30,40 Q38,37 46,40 L46,47 Q38,44 30,47 Z" fill="#E8943A"/>
+    <path d="M30,47 Q38,44 46,47" stroke="#D4822A" stroke-width="1" fill="none"/>
+    <ellipse cx="62" cy="46" rx="8" ry="7" fill="#2C1810"/>
+    <ellipse cx="62" cy="46" rx="5.5" ry="5" fill="#7A3B12"/>
+    <circle cx="64.5" cy="43" r="2" fill="white"/>
+    <path d="M54,40 Q62,37 70,40 L70,47 Q62,44 54,47 Z" fill="#E8943A"/>
+    <path d="M54,47 Q62,44 70,47" stroke="#D4822A" stroke-width="1" fill="none"/>
+    <line x1="34" y1="38" x2="36" y2="34" stroke="#D4822A" stroke-width="2" stroke-linecap="round"/>
+    <line x1="66" y1="38" x2="64" y2="34" stroke="#D4822A" stroke-width="2" stroke-linecap="round"/>
+  ` : `
+    <g style="animation:petBlink 5s ease-in-out infinite;transform-origin:38px 44px;">
+      <ellipse cx="38" cy="44" rx="8" ry="9" fill="#2C1810"/>
+      <ellipse cx="38" cy="44" rx="5.5" ry="6.5" fill="#7A3B12"/>
+      <circle cx="40.5" cy="40.5" r="2.5" fill="white"/>
+      <circle cx="37" cy="48" r="1.2" fill="white" opacity="0.5"/>
+    </g>
+    <g style="animation:petBlink 5s ease-in-out infinite .15s;transform-origin:62px 44px;">
+      <ellipse cx="62" cy="44" rx="8" ry="9" fill="#2C1810"/>
+      <ellipse cx="62" cy="44" rx="5.5" ry="6.5" fill="#7A3B12"/>
+      <circle cx="64.5" cy="40.5" r="2.5" fill="white"/>
+      <circle cx="61" cy="48" r="1.2" fill="white" opacity="0.5"/>
+    </g>
+  `;
+
+  const mouth = eating ? `
+    <path d="M44,58 Q50,66 56,58" stroke="#C06060" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+    <path d="M47,59 L47,62 Q50,64 53,62 L53,59" fill="white" opacity="0.85"/>
+  ` : hungry ? `
+    <path d="M46.5,61 Q50,57.5 53.5,61" stroke="#C06060" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  ` : `
+    <path d="M46,58 Q50,62.5 54,58" stroke="#C06060" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  `;
+
+  const sc1 = evolve ? '#FFD700' : '#FFB6C1';
+  const sc2 = evolve ? '#FFA500' : '#FF69B4';
+  const sparkles = eating ? `
+    <g style="animation:sparkleAnim .8s ease-in-out infinite 0s;transform-origin:10px 30px;"><text x="4" y="36" font-size="13" fill="${sc1}">✦</text></g>
+    <g style="animation:sparkleAnim .8s ease-in-out infinite .2s;transform-origin:86px 22px;"><text x="80" y="28" font-size="11" fill="${sc1}">✦</text></g>
+    <g style="animation:sparkleAnim .8s ease-in-out infinite .4s;transform-origin:4px 60px;"><text x="-1" y="66" font-size="9" fill="${sc2}">✦</text></g>
+    <g style="animation:sparkleAnim .8s ease-in-out infinite .6s;transform-origin:92px 56px;"><text x="88" y="62" font-size="9" fill="${sc2}">✦</text></g>
+    <g style="animation:sparkleAnim .8s ease-in-out infinite .3s;transform-origin:18px 18px;"><text x="13" y="24" font-size="10" fill="${sc1}">✦</text></g>
+    <g style="animation:sparkleAnim .8s ease-in-out infinite .5s;transform-origin:79px 18px;"><text x="74" y="24" font-size="10" fill="${sc1}">✦</text></g>
+  ` : '';
+
+  const glowStyle = evolve ? 'animation:petGlow 1.2s ease-in-out infinite;' : '';
+  const blush = eating ? 0.6 : 0.35;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" width="${size}" height="${size}" style="${glowStyle}">
+  ${sparkles}
+  <g style="${bodyAnim}">
+    <g style="${tailAnim}">
+      <path d="M32,88 C10,84 4,68 18,58" stroke="#E8943A" stroke-width="12" fill="none" stroke-linecap="round"/>
+      <path d="M32,88 C10,84 4,68 18,58" stroke="#D4822A" stroke-width="4"  fill="none" stroke-linecap="round" stroke-dasharray="7 9" opacity="0.5"/>
+      <circle cx="18" cy="58" r="7" fill="#E8943A"/>
+      <circle cx="18" cy="58" r="4" fill="#F0C870"/>
+    </g>
+    <ellipse cx="50" cy="86" rx="26" ry="21" fill="#E8943A"/>
+    <ellipse cx="50" cy="90" rx="16" ry="14" fill="#F0C870"/>
+    <path d="M36,80 Q50,77 64,80" stroke="#D4822A" stroke-width="2.5" fill="none" opacity="0.4" stroke-linecap="round"/>
+    <ellipse cx="34" cy="103" rx="13" ry="7.5" fill="#E8943A"/>
+    <circle cx="29" cy="107" r="2.8" fill="#E08080"/>
+    <circle cx="34" cy="108.5" r="2.8" fill="#E08080"/>
+    <circle cx="39" cy="107" r="2.8" fill="#E08080"/>
+    <ellipse cx="66" cy="103" rx="13" ry="7.5" fill="#E8943A"/>
+    <circle cx="61" cy="107" r="2.8" fill="#E08080"/>
+    <circle cx="66" cy="108.5" r="2.8" fill="#E08080"/>
+    <circle cx="71" cy="107" r="2.8" fill="#E08080"/>
+    <circle cx="50" cy="46" r="28" fill="#E8943A"/>
+    <polygon points="18,34 21,8 41,30" fill="#E8943A"/>
+    <polygon points="23,31 26,13 39,29" fill="#F4A0B8"/>
+    <polygon points="82,34 79,8 59,30" fill="#E8943A"/>
+    <polygon points="77,31 74,13 61,29" fill="#F4A0B8"/>
+    <path d="M40,22 Q50,18 60,22" stroke="#D4822A" stroke-width="2.5" fill="none" opacity="0.55" stroke-linecap="round"/>
+    <path d="M37,16 Q50,12 63,16" stroke="#D4822A" stroke-width="2"   fill="none" opacity="0.35" stroke-linecap="round"/>
+    ${eyes}
+    <path d="M47.5,53.5 L50,57 L52.5,53.5 Z" fill="#E07878"/>
+    <circle cx="49" cy="54.5" r="1" fill="rgba(255,255,255,0.5)"/>
+    ${mouth}
+    <ellipse cx="26" cy="53" rx="8" ry="5" fill="#F4A0A0" opacity="${blush}"/>
+    <ellipse cx="74" cy="53" rx="8" ry="5" fill="#F4A0A0" opacity="${blush}"/>
+    <line x1="12" y1="51"  x2="37" y2="53.5" stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
+    <line x1="10" y1="55"  x2="37" y2="55"   stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
+    <line x1="12" y1="59"  x2="37" y2="56.5" stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
+    <line x1="88" y1="51"  x2="63" y2="53.5" stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
+    <line x1="90" y1="55"  x2="63" y2="55"   stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
+    <line x1="88" y1="59"  x2="63" y2="56.5" stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
+  </g>
+</svg>`;
+}
+
+function PetCat({ state, size = 160 }) {
+  useEffect(() => { injectPetStyles(); }, []);
+  return React.createElement('div', {
+    dangerouslySetInnerHTML: { __html: catSVG(state, size) },
+    style: { width: size, height: size, display: 'inline-block' }
+  });
+}
+
+function PetHearts({ calPct }) {
+  const filled = calPct <= 0 ? 0 : calPct < 0.25 ? 1 : calPct < 0.5 ? 2 : calPct < 0.75 ? 3 : 4;
+  return React.createElement('div', { style: { display: 'flex', gap: 4, marginTop: 6 } },
+    [0,1,2,3].map(i =>
+      React.createElement('span', {
+        key: i,
+        style: { fontSize: 18, filter: i < filled ? 'none' : 'grayscale(1) opacity(0.4)' }
+      }, '❤️')
+    )
+  );
+}
+
 // ─── Icons (lucide) ──────────────────────────────────────────────────────────
 function Icon({ name, size = 20, color = 'currentColor', strokeWidth = 2 }) {
   const el = useRef(null);
@@ -354,105 +508,176 @@ function ApiKeyModal({ current, onSave, onClose }) {
 }
 
 // ─── Home Page ────────────────────────────────────────────────────────────────
-function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, selectedDate, onDateChange, apiKey }) {
+function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, selectedDate, onDateChange, apiKey, onOpenSettings }) {
   const [showForm, setShowForm] = useState(false);
   const [editGoals, setEditGoals] = useState(false);
+  const [justFed, setJustFed] = useState(false);
+  const [evolveActive, setEvolveActive] = useState(false);
+  const fedTimerRef = useRef(null);
+  const evolveTimerRef = useRef(null);
+
   const dateKey = toDateKey(selectedDate);
   const dayMeals = meals[dateKey] || [];
   const isToday = isSameDay(selectedDate, today());
-  const isFuture = selectedDate > today();
 
   const totals = dayMeals.reduce((acc, m) => ({
     protein: acc.protein + (Number(m.protein) || 0),
-    carbs: acc.carbs + (Number(m.carbs) || 0),
-    fat: acc.fat + (Number(m.fat) || 0),
-    calories: acc.calories + (Number(m.calories) || 0),
+    carbs:   acc.carbs   + (Number(m.carbs)   || 0),
+    fat:     acc.fat     + (Number(m.fat)     || 0),
+    calories:acc.calories+ (Number(m.calories)|| 0),
   }), { protein: 0, carbs: 0, fat: 0, calories: 0 });
 
   const goalCals = goals.protein * 4 + goals.carbs * 4 + goals.fat * 9;
+  const calPct   = goalCals > 0 ? totals.calories / goalCals : 0;
   const calsLeft = Math.round(goalCals - totals.calories);
   const calsOver = calsLeft < 0;
 
+  // Pet state machine
+  const petState = evolveActive ? 'evolve'
+    : justFed ? 'happy'
+    : (isToday && calPct < 0.2) ? 'hungry'
+    : 'idle';
+
+  function handleMealAdd(meal) {
+    const mealCals = meal.calories || calcCals(meal.protein, meal.carbs, meal.fat);
+    const willHitGoal = goalCals > 0 && totals.calories < goalCals && (totals.calories + mealCals) >= goalCals;
+
+    onAddMeal(dateKey, meal);
+
+    // Trigger happy animation
+    clearTimeout(fedTimerRef.current);
+    setJustFed(true);
+    fedTimerRef.current = setTimeout(() => setJustFed(false), 3000);
+
+    // Trigger evolve after happy if goal reached
+    if (willHitGoal) {
+      clearTimeout(evolveTimerRef.current);
+      evolveTimerRef.current = setTimeout(() => {
+        setEvolveActive(true);
+        setTimeout(() => setEvolveActive(false), 5000);
+      }, 3100);
+    }
+  }
+
   return (
-    React.createElement('div', { className: 'flex flex-col h-full' },
-      // Green header
-      React.createElement('div', { className: 'bg-green-500 px-4 pt-12 pb-24 flex-shrink-0' },
-        // Date nav
-        React.createElement('div', { className: 'flex items-center justify-between mb-2' },
-          React.createElement('button', {
-            onClick: () => onDateChange(addDays(selectedDate, -1)),
-            className: 'text-white/80 hover:text-white p-1'
-          }, React.createElement(Icon, { name: 'ChevronLeft', size: 22, color: 'white' })),
-          React.createElement('div', { className: 'text-center' },
-            React.createElement('div', { className: 'text-white font-bold text-base' }, dateLabel(selectedDate)),
-            !isToday && React.createElement('div', { className: 'text-white/70 text-xs' }, formatDay(selectedDate))
-          ),
-          React.createElement('button', {
-            onClick: () => !isFuture && !isToday && onDateChange(addDays(selectedDate, 1)),
-            disabled: isToday,
-            className: `p-1 ${isToday ? 'text-white/30' : 'text-white/80 hover:text-white'}`
-          }, React.createElement(Icon, { name: 'ChevronRight', size: 22, color: 'white' }))
-        )
+    React.createElement('div', { style: { display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', overflow: 'hidden' } },
+
+      // ── Green background layer ──
+      React.createElement('div', {
+        style: { position: 'absolute', inset: 0, bottom: '44%', backgroundColor: '#22c55e' }
+      }),
+
+      // ── Pet name + hearts (top-left) ──
+      React.createElement('div', {
+        style: { position: 'absolute', top: 48, left: 20, zIndex: 30 }
+      },
+        React.createElement('div', { style: { color: 'white', fontWeight: 900, fontSize: 28, lineHeight: 1 } }, 'Bagel'),
+        React.createElement(PetHearts, { calPct: isToday ? calPct : 0 })
       ),
 
-      // Scrollable content pulled up over green header
-      React.createElement('div', { className: 'flex-1 overflow-y-auto -mt-20 px-4 pb-32' },
+      // ── Settings gear (top-right) ──
+      React.createElement('button', {
+        onClick: onOpenSettings,
+        style: { position: 'absolute', top: 52, right: 20, zIndex: 30, background: 'none', border: 'none', cursor: 'pointer' }
+      }, React.createElement(Icon, { name: 'Settings', size: 22, color: 'white' })),
 
-        // Calories card
-        React.createElement('div', { className: 'bg-white rounded-3xl shadow-sm p-5 mb-3' },
-          React.createElement('div', { className: 'flex items-center justify-between mb-4' },
+      // ── Cat (centered, sits at green/white boundary) ──
+      React.createElement('div', {
+        style: {
+          position: 'absolute',
+          top: '12%',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 30,
+          pointerEvents: 'none'
+        }
+      }, React.createElement(PetCat, { state: petState, size: 180 })),
+
+      // ── White scrollable card ──
+      React.createElement('div', {
+        style: {
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          top: '44%',
+          backgroundColor: 'white',
+          borderTopLeftRadius: 32,
+          borderTopRightRadius: 32,
+          overflowY: 'auto',
+          paddingBottom: 120,
+          zIndex: 20,
+        }
+      },
+        // Date nav inside card
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 8px' } },
+          React.createElement('button', {
+            onClick: () => onDateChange(addDays(selectedDate, -1)),
+            style: { background: 'none', border: 'none', cursor: 'pointer', padding: 4 }
+          }, React.createElement(Icon, { name: 'ChevronLeft', size: 20 })),
+          React.createElement('div', { style: { textAlign: 'center' } },
+            React.createElement('div', { style: { fontWeight: 700, fontSize: 15, color: '#1f2937' } }, dateLabel(selectedDate)),
+            !isToday && React.createElement('div', { style: { fontSize: 11, color: '#9ca3af' } }, formatDay(selectedDate))
+          ),
+          React.createElement('button', {
+            onClick: () => !isToday && onDateChange(addDays(selectedDate, 1)),
+            disabled: isToday,
+            style: { background: 'none', border: 'none', cursor: isToday ? 'default' : 'pointer', padding: 4, opacity: isToday ? 0.3 : 1 }
+          }, React.createElement(Icon, { name: 'ChevronRight', size: 20 }))
+        ),
+
+        // Calories + macros card
+        React.createElement('div', { style: { margin: '0 16px 12px', background: '#f9fafb', borderRadius: 24, padding: '16px 20px' } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 } },
             React.createElement('div', null,
-              React.createElement('div', { className: 'text-xs text-gray-400 mb-1' }, calsOver ? 'Calories over' : 'Calories left'),
-              React.createElement('div', { className: 'flex items-baseline gap-1' },
-                React.createElement('span', { className: `text-4xl font-black ${calsOver ? 'text-red-500' : 'text-gray-900'}` },
-                  Math.abs(calsLeft).toLocaleString()),
-                React.createElement('span', { className: 'text-gray-400 text-sm' }, 'kcal')
+              React.createElement('div', { style: { fontSize: 11, color: '#9ca3af', marginBottom: 2 } }, calsOver ? 'Calories over' : 'Calories left'),
+              React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
+                React.createElement('span', { style: { fontSize: 36, fontWeight: 900, color: calsOver ? '#ef4444' : '#111827' } }, Math.abs(calsLeft).toLocaleString()),
+                React.createElement('span', { style: { fontSize: 13, color: '#9ca3af' } }, 'kcal')
               )
             ),
             React.createElement('button', {
               onClick: () => setShowForm(true),
-              className: 'w-12 h-12 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors'
+              style: { width: 48, height: 48, borderRadius: '50%', background: 'white', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,.1)' }
             }, React.createElement(Icon, { name: 'Plus', size: 22 }))
           ),
 
-          // Macro bars
-          React.createElement('div', { className: 'flex gap-4' },
-            React.createElement(MacroBar, { label: 'Carbs', value: totals.carbs, goal: goals.carbs }),
-            React.createElement(MacroBar, { label: 'Fats', value: totals.fat, goal: goals.fat }),
+          React.createElement('div', { style: { display: 'flex', gap: 16 } },
+            React.createElement(MacroBar, { label: 'Carbs',    value: totals.carbs,   goal: goals.carbs }),
+            React.createElement(MacroBar, { label: 'Fats',     value: totals.fat,     goal: goals.fat }),
             React.createElement(MacroBar, { label: 'Proteins', value: totals.protein, goal: goals.protein })
           ),
 
-          React.createElement('div', { className: 'flex items-center justify-between mt-4 pt-3 border-t border-gray-50' },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTop: '1px solid #f3f4f6' } },
             React.createElement('button', {
               onClick: () => setEditGoals(g => !g),
-              className: 'text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1'
+              style: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 4 }
             },
               React.createElement(Icon, { name: 'Target', size: 12 }),
               ` Goal: ${Math.round(goalCals).toLocaleString()} kcal`
             ),
-            React.createElement('span', { className: 'text-gray-300 text-lg' }, '···')
+            React.createElement('span', { style: { color: '#d1d5db', fontSize: 18 } }, '···')
           ),
 
           editGoals && React.createElement(GoalsEditor, { goals, onChange: onGoalsChange })
         ),
 
-        // Meals list card
-        dayMeals.length > 0 && React.createElement('div', { className: 'bg-white rounded-3xl shadow-sm p-5 mb-3' },
-          React.createElement('div', { className: 'text-sm font-semibold text-gray-700 mb-2' }, `Meals · ${dayMeals.length}`),
-          dayMeals.map(m => React.createElement(MealCard, { key: m.id, meal: m, onDelete: id => onDeleteMeal(dateKey, id) }))
-        ),
-
-        // Empty state
-        dayMeals.length === 0 && React.createElement('div', { className: 'bg-white rounded-3xl shadow-sm p-8 text-center mb-3' },
-          React.createElement('div', { className: 'text-4xl mb-3' }, '🍽️'),
-          React.createElement('div', { className: 'text-gray-400 text-sm' }, 'No meals logged yet.'),
-          React.createElement('div', { className: 'text-gray-300 text-xs mt-1' }, 'Tap + to add your first meal')
-        )
+        // Meals list
+        dayMeals.length > 0
+          ? React.createElement('div', { style: { margin: '0 16px 12px', background: '#f9fafb', borderRadius: 24, padding: '16px 20px' } },
+              React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 8 } }, `Meals · ${dayMeals.length}`),
+              dayMeals.map(m => React.createElement(MealCard, { key: m.id, meal: m, onDelete: id => onDeleteMeal(dateKey, id) }))
+            )
+          : React.createElement('div', { style: { margin: '0 16px', background: '#f9fafb', borderRadius: 24, padding: 32, textAlign: 'center' } },
+              React.createElement('div', { style: { fontSize: 36, marginBottom: 8 } }, '🍽️'),
+              React.createElement('div', { style: { color: '#9ca3af', fontSize: 13 } }, 'No meals logged yet.'),
+              React.createElement('div', { style: { color: '#d1d5db', fontSize: 11, marginTop: 4 } }, 'Tap + to add your first meal')
+            )
       ),
 
       showForm && React.createElement(MealForm, {
         allMeals: meals,
-        onAdd: meal => { onAddMeal(dateKey, meal); setShowForm(false); },
+        onAdd: meal => { handleMealAdd(meal); setShowForm(false); },
         onCancel: () => setShowForm(false),
         apiKey
       })
@@ -601,13 +826,6 @@ function App() {
     React.createElement('div', { className: 'flex justify-center min-h-screen bg-gray-200' },
       React.createElement('div', { className: 'relative w-full max-w-sm min-h-screen bg-gray-50 flex flex-col overflow-hidden' },
 
-        // API key button (top-right gear)
-        React.createElement('button', {
-          onClick: () => setShowApiKey(true),
-          className: 'absolute top-4 right-4 z-30 text-white/80 hover:text-white',
-          style: { display: page === 'home' ? 'block' : 'none' }
-        }, React.createElement(Icon, { name: 'Settings', size: 22, color: 'white' })),
-
         // Pages
         React.createElement('div', { className: 'flex-1 overflow-hidden' },
           page === 'home'
@@ -618,6 +836,7 @@ function App() {
                 onDeleteMeal: deleteMeal,
                 selectedDate,
                 onDateChange: setSelectedDate,
+                onOpenSettings: () => setShowApiKey(true),
               })
             : React.createElement(AnalyticsPage, { meals })
         ),
