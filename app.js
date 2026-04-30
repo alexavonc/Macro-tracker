@@ -66,49 +66,20 @@ const ANIMATIONS = {
   happy:  { frames: [14,15,16,17],       fps: 8,  loop: true  },
 };
 
-// Auto-detect per-frame bounding boxes from non-white pixels.
-// Returns array of {sx, sy, sw, sh} for each of numRows×numCols frames.
-function detectFrames(canvas, ctx, numCols, numRows) {
-  const { width, height } = canvas;
-  const px = ctx.getImageData(0, 0, width, height).data;
-  const rowH = Math.floor(height / numRows);
-  const colW = Math.floor(width  / numCols);
-
-  const rowBounds = [];
-  for (let row = 0; row < numRows; row++) {
-    let minY = height, maxY = 0;
-    for (let y = row * rowH; y < Math.min((row + 1) * rowH, height); y++) {
-      for (let x = 0; x < width; x++) {
-        const i = (y * width + x) * 4;
-        if (px[i] < 240 || px[i+1] < 240 || px[i+2] < 240) {
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-    rowBounds.push({ minY: Math.max(0, minY - 8), maxY: Math.min(height - 1, maxY + 8) });
-  }
-
-  const colBounds = [];
-  for (let col = 0; col < numCols; col++) {
-    let minX = width, maxX = 0;
-    for (let x = col * colW; x < Math.min((col + 1) * colW, width); x++) {
-      for (let y = 0; y < height; y++) {
-        const i = (y * width + x) * 4;
-        if (px[i] < 240 || px[i+1] < 240 || px[i+2] < 240) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-        }
-      }
-    }
-    colBounds.push({ minX: Math.max(0, minX - 8), maxX: Math.min(width - 1, maxX + 8) });
-  }
-
+// Fixed-grid frame extractor — each cell is exactly imgW/numCols × imgH/numRows.
+// Returns array of {sx, sy, sw, sh} for each of numRows×numCols frames (row-major).
+function buildFrames(imgWidth, imgHeight, numCols, numRows) {
+  const cellW = imgWidth  / numCols;
+  const cellH = imgHeight / numRows;
   const frames = [];
   for (let row = 0; row < numRows; row++) {
     for (let col = 0; col < numCols; col++) {
-      const rb = rowBounds[row], cb = colBounds[col];
-      frames.push({ sx: cb.minX, sy: rb.minY, sw: cb.maxX - cb.minX, sh: rb.maxY - rb.minY });
+      frames.push({
+        sx: Math.floor(col * cellW),
+        sy: Math.floor(row * cellH),
+        sw: Math.round(cellW),
+        sh: Math.round(cellH),
+      });
     }
   }
   return frames;
@@ -133,7 +104,7 @@ function loadSprite(cb) {
     const ctx = oc.getContext('2d');
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(img, 0, 0);
-    _sprite = { img, frames: detectFrames(oc, ctx, 7, 4) };
+    _sprite = { img, frames: buildFrames(img.naturalWidth, img.naturalHeight, 7, 4) };
     console.log('[CatSprite] sheet loaded, detected', _sprite.frames.length, 'frames');
     _pending.forEach(fn => fn(_sprite));
     _pending.length = 0;
