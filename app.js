@@ -60,10 +60,10 @@ const DEFAULT_GOALS = { protein: 150, carbs: 200, fat: 65, calories: 2000 };
 const SPRITE_PATH = '/assets/cat-sprite.png';
 
 const ANIMATIONS = {
-  idle:   { frames: [0,1,2,3,4,5],       fps: 6,  loop: true  },
-  hungry: { frames: [7,8,9,10,11,12],    fps: 5,  loop: true  },
-  evolve: { frames: [14,15,16,17,18,19], fps: 10, loop: false },
-  happy:  { frames: [14,15,16,17],       fps: 8,  loop: true  },
+  idle:   { frames: [0,1,2,3,4,5],       fps: 1.5, loop: true  },
+  hungry: { frames: [7,8,9,10,11,12],    fps: 2,   loop: true  },
+  evolve: { frames: [14,15,16,17,18,19], fps: 5,   loop: false },
+  happy:  { frames: [14,15,16,17],       fps: 3,   loop: true  },
 };
 
 // Per-frame tight-bbox extractor.
@@ -84,12 +84,12 @@ function buildFrames(imgWidth, imgHeight, numCols, numRows, px) {
       for (let y=y0; y<y1; y++) {
         for (let x=x0; x<x1; x++) {
           const i=(y*imgWidth+x)*4;
-          if (px[i+3]>20 && (px[i]<235||px[i+1]<235||px[i+2]<235)) {
+          if (px[i+3]>128 && (px[i]<200||px[i+1]<200||px[i+2]<200)) {
             if(x<mnX)mnX=x; if(x>mxX)mxX=x; if(y<mnY)mnY=y; if(y>mxY)mxY=y;
           }
         }
       }
-      const pad=4;
+      const pad=2;
       raw.push(mxX>=mnX && mxY>=mnY
         ? { sx:Math.max(x0,mnX-pad), sy:Math.max(y0,mnY-pad),
             sw:Math.min(x1,mxX+pad+1)-Math.max(x0,mnX-pad),
