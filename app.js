@@ -66,21 +66,45 @@ const ANIMATIONS = {
   happy:  { frames: [14,15,16,17],       fps: 8,  loop: true  },
 };
 
-// Fixed-grid frame extractor — each cell is exactly imgW/numCols × imgH/numRows.
-// Returns array of {sx, sy, sw, sh} for each of numRows×numCols frames (row-major).
-function buildFrames(imgWidth, imgHeight, numCols, numRows) {
+// Per-frame tight-bbox extractor.
+// Scans each cell for non-background pixels (alpha>20 AND not near-white),
+// stores the tight content rect, and a per-row refW/refH (max content size in
+// that row) so the caller can scale all frames in a row at the same factor.
+function buildFrames(imgWidth, imgHeight, numCols, numRows, px) {
   const cellW = imgWidth  / numCols;
   const cellH = imgHeight / numRows;
-  const frames = [];
+
+  // First pass: tight bbox per cell
+  const raw = [];
   for (let row = 0; row < numRows; row++) {
     for (let col = 0; col < numCols; col++) {
-      frames.push({
-        sx: Math.floor(col * cellW),
-        sy: Math.floor(row * cellH),
-        sw: Math.round(cellW),
-        sh: Math.round(cellH),
-      });
+      const x0 = Math.floor(col * cellW),  x1 = Math.min(imgWidth,  Math.floor((col+1)*cellW));
+      const y0 = Math.floor(row * cellH),  y1 = Math.min(imgHeight, Math.floor((row+1)*cellH));
+      let mnX=x1, mxX=x0-1, mnY=y1, mxY=y0-1;
+      for (let y=y0; y<y1; y++) {
+        for (let x=x0; x<x1; x++) {
+          const i=(y*imgWidth+x)*4;
+          if (px[i+3]>20 && (px[i]<235||px[i+1]<235||px[i+2]<235)) {
+            if(x<mnX)mnX=x; if(x>mxX)mxX=x; if(y<mnY)mnY=y; if(y>mxY)mxY=y;
+          }
+        }
+      }
+      const pad=4;
+      raw.push(mxX>=mnX && mxY>=mnY
+        ? { sx:Math.max(x0,mnX-pad), sy:Math.max(y0,mnY-pad),
+            sw:Math.min(x1,mxX+pad+1)-Math.max(x0,mnX-pad),
+            sh:Math.min(y1,mxY+pad+1)-Math.max(y0,mnY-pad) }
+        : { sx:x0, sy:y0, sw:x1-x0, sh:y1-y0 });
     }
+  }
+
+  // Second pass: attach per-row reference size (largest content in that row)
+  const frames = [];
+  for (let row=0; row<numRows; row++) {
+    const slice = raw.slice(row*numCols, (row+1)*numCols);
+    const refW = Math.max(...slice.map(f=>f.sw));
+    const refH = Math.max(...slice.map(f=>f.sh));
+    slice.forEach(f => frames.push({ ...f, refW, refH }));
   }
   return frames;
 }
@@ -104,7 +128,8 @@ function loadSprite(cb) {
     const ctx = oc.getContext('2d');
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(img, 0, 0);
-    _sprite = { img, frames: buildFrames(img.naturalWidth, img.naturalHeight, 7, 4) };
+    const px = ctx.getImageData(0, 0, oc.width, oc.height).data;
+    _sprite = { img, frames: buildFrames(img.naturalWidth, img.naturalHeight, 7, 4, px) };
     console.log('[CatSprite] sheet loaded, detected', _sprite.frames.length, 'frames');
     _pending.forEach(fn => fn(_sprite));
     _pending.length = 0;
@@ -172,7 +197,13 @@ function PetCat({ state = 'idle', size = 160, debug = false }) {
       const fi = anim.frames[frameIdxRef.current];
       const f  = sprite.frames[fi];
       if (f && f.sw > 0 && f.sh > 0) {
-        ctx.drawImage(sprite.img, f.sx, f.sy, f.sw, f.sh, 0, 0, size, size);
+        // Scale using the row's max content size so all frames animate at the same zoom
+        const scale = Math.min(size / f.refW, size / f.refH);
+        const dw = Math.round(f.sw * scale);
+        const dh = Math.round(f.sh * scale);
+        const dx = Math.round((size - dw) / 2);
+        const dy = Math.round((size - dh) / 2);
+        ctx.drawImage(sprite.img, f.sx, f.sy, f.sw, f.sh, dx, dy, dw, dh);
       }
 
       frameIdxRef.current++;
