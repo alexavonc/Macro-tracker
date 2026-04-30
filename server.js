@@ -6,27 +6,34 @@ const PORT = process.env.PORT || 8080;
 
 const types = {
   '.html': 'text/html',
-  '.js': 'application/javascript',
-  '.css': 'text/css',
+  '.js':   'application/javascript',
+  '.css':  'text/css',
   '.json': 'application/json',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
+  '.png':  'image/png',
+  '.ico':  'image/x-icon',
 };
 
 http.createServer((req, res) => {
-  let filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
-  const ext = path.extname(filePath);
+  const urlPath  = req.url === '/' ? 'index.html' : req.url;
+  const ext      = path.extname(urlPath);
   const contentType = types[ext] || 'text/plain';
 
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      fs.readFile(path.join(__dirname, 'index.html'), (e, d) => {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(d);
-      });
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': contentType });
-    res.end(data);
-  });
+  // Try public/ first, then root (preserves backwards-compat with app.js/index.html at root)
+  const candidates = [
+    path.join(__dirname, 'public', urlPath),
+    path.join(__dirname, urlPath),
+    path.join(__dirname, 'index.html'),  // SPA fallback
+  ];
+
+  const tryNext = (list) => {
+    if (!list.length) { res.writeHead(404); res.end('Not found'); return; }
+    fs.readFile(list[0], (err, data) => {
+      if (err) { tryNext(list.slice(1)); return; }
+      const ct = list[0].endsWith('index.html') ? 'text/html' : contentType;
+      res.writeHead(200, { 'Content-Type': ct });
+      res.end(data);
+    });
+  };
+
+  tryNext(candidates);
 }).listen(PORT, () => console.log(`Macro Tracker running on port ${PORT}`));

@@ -50,255 +50,179 @@ function calcCals(protein, carbs, fat) {
 // ─── Default goals ────────────────────────────────────────────────────────────
 const DEFAULT_GOALS = { protein: 150, carbs: 200, fat: 65, calories: 2000 };
 
-// ─── Pet system — canvas sprite sheet renderer ───────────────────────────────
+// ─── Pet system — sprite sheet ───────────────────────────────────────────────
+// Sheet: public/assets/cat-sprite.png  →  1536×1024, 7 cols × 4 rows = 28 frames
+// Row 1 (frames  0-6):  idle
+// Row 2 (frames  7-13): hungry
+// Row 3 (frames 14-20): evolve / sparkle
+// Row 4 (frames 21-27): dead (unused in this app — mapped to happy)
 
-// Animation config matching the 4-row × 6-col sprite sheet spec
-const SPRITE_ANIM = {
-  idle:   { start: 0,  count: 6, fps: 6,  loop: true  },
-  hungry: { start: 6,  count: 6, fps: 5,  loop: true  },
-  evolve: { start: 12, count: 6, fps: 10, loop: false },
-  happy:  { start: 18, count: 6, fps: 8,  loop: true  },
+const SPRITE_PATH = '/assets/cat-sprite.png';
+
+const ANIMATIONS = {
+  idle:   { frames: [0,1,2,3,4,5],       fps: 6,  loop: true  },
+  hungry: { frames: [7,8,9,10,11,12],    fps: 5,  loop: true  },
+  evolve: { frames: [14,15,16,17,18,19], fps: 10, loop: false },
+  happy:  { frames: [14,15,16,17],       fps: 8,  loop: true  },
 };
 
-// Per-frame parameters for all 24 frames
-// yOff: body Y shift in logical pixels (breathing / bounce / droop)
-// eye: 'open' | 'half' | 'closed' | 'droop' | 'happy' | 'shiny'
-// mouth: 'smile' | 'neutral' | 'frown' | 'open'
-// sp: sparkle count 0-3
-// g: glow intensity 0-5 (evolve only)
-// droopTail: true = tail hangs low (hungry)
-const FRAME_DATA = [
-  // Idle 0-5: gentle breathing + blink cycle
-  { yOff: 0,  eye: 'open',   mouth: 'smile',   sp: 0, g: 0, droopTail: false },
-  { yOff:-1,  eye: 'open',   mouth: 'smile',   sp: 0, g: 0, droopTail: false },
-  { yOff:-1,  eye: 'open',   mouth: 'smile',   sp: 0, g: 0, droopTail: false },
-  { yOff: 0,  eye: 'half',   mouth: 'neutral', sp: 0, g: 0, droopTail: false },
-  { yOff: 0,  eye: 'closed', mouth: 'neutral', sp: 0, g: 0, droopTail: false },
-  { yOff: 0,  eye: 'open',   mouth: 'smile',   sp: 0, g: 0, droopTail: false },
-  // Hungry 6-11: slow droopy slump
-  { yOff: 1,  eye: 'droop',  mouth: 'frown',   sp: 0, g: 0, droopTail: true  },
-  { yOff: 2,  eye: 'droop',  mouth: 'frown',   sp: 0, g: 0, droopTail: true  },
-  { yOff: 1,  eye: 'droop',  mouth: 'frown',   sp: 0, g: 0, droopTail: true  },
-  { yOff: 2,  eye: 'droop',  mouth: 'frown',   sp: 0, g: 0, droopTail: true  },
-  { yOff: 1,  eye: 'droop',  mouth: 'frown',   sp: 0, g: 0, droopTail: true  },
-  { yOff: 2,  eye: 'droop',  mouth: 'frown',   sp: 0, g: 0, droopTail: true  },
-  // Evolve 12-17: one-shot transformation
-  { yOff: 0,  eye: 'open',   mouth: 'smile',   sp: 0, g: 0, droopTail: false },
-  { yOff:-1,  eye: 'open',   mouth: 'smile',   sp: 1, g: 1, droopTail: false },
-  { yOff:-1,  eye: 'open',   mouth: 'smile',   sp: 2, g: 2, droopTail: false },
-  { yOff:-2,  eye: 'shiny',  mouth: 'open',    sp: 3, g: 3, droopTail: false },
-  { yOff:-2,  eye: 'shiny',  mouth: 'open',    sp: 3, g: 4, droopTail: false },
-  { yOff:-1,  eye: 'shiny',  mouth: 'open',    sp: 2, g: 5, droopTail: false },
-  // Happy 18-23: bounce + sparkles
-  { yOff: 0,  eye: 'happy',  mouth: 'open',    sp: 0, g: 0, droopTail: false },
-  { yOff:-2,  eye: 'happy',  mouth: 'open',    sp: 1, g: 0, droopTail: false },
-  { yOff:-4,  eye: 'happy',  mouth: 'open',    sp: 2, g: 0, droopTail: false },
-  { yOff:-2,  eye: 'happy',  mouth: 'open',    sp: 1, g: 0, droopTail: false },
-  { yOff: 0,  eye: 'happy',  mouth: 'open',    sp: 0, g: 0, droopTail: false },
-  { yOff: 0,  eye: 'happy',  mouth: 'open',    sp: 1, g: 0, droopTail: false },
-];
+// Auto-detect per-frame bounding boxes from non-white pixels.
+// Returns array of {sx, sy, sw, sh} for each of numRows×numCols frames.
+function detectFrames(canvas, ctx, numCols, numRows) {
+  const { width, height } = canvas;
+  const px = ctx.getImageData(0, 0, width, height).data;
+  const rowH = Math.floor(height / numRows);
+  const colW = Math.floor(width  / numCols);
 
-// Draw a single 256×256 frame onto ctx at (destX, destY)
-function drawCatFrame(ctx, fi, destX, destY, frameSize) {
-  const fd = FRAME_DATA[fi] || FRAME_DATA[0];
-  const { yOff, eye, mouth: mo, sp, g, droopTail } = fd;
+  const rowBounds = [];
+  for (let row = 0; row < numRows; row++) {
+    let minY = height, maxY = 0;
+    for (let y = row * rowH; y < Math.min((row + 1) * rowH, height); y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        if (px[i] < 240 || px[i+1] < 240 || px[i+2] < 240) {
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    rowBounds.push({ minY: Math.max(0, minY - 8), maxY: Math.min(height - 1, maxY + 8) });
+  }
 
-  // Scale: fit 22×28 logical-pixel cat inside frameSize×frameSize, centred
-  const S   = Math.round(frameSize / 32);  // e.g. 256/32 = 8
-  const CW  = 22, CH = 28;
-  const ox  = destX + Math.floor((frameSize - CW * S) / 2);
-  const oy  = destY + Math.floor((frameSize - CH * S) / 2) + yOff * S;
+  const colBounds = [];
+  for (let col = 0; col < numCols; col++) {
+    let minX = width, maxX = 0;
+    for (let x = col * colW; x < Math.min((col + 1) * colW, width); x++) {
+      for (let y = 0; y < height; y++) {
+        const i = (y * width + x) * 4;
+        if (px[i] < 240 || px[i+1] < 240 || px[i+2] < 240) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+        }
+      }
+    }
+    colBounds.push({ minX: Math.max(0, minX - 8), maxX: Math.min(width - 1, maxX + 8) });
+  }
 
-  // Palette (warm brown tabby)
-  const K='#1C0C00', D='#5C3010', Br='#9B5828', Lb='#C07838',
-        Cr='#F0D898', Pk='#D87060', Wh='#FFFEF8', Ir='#486040',
-        Pu='#120600', Rs='#E09080', Gd='#F8D020';
-  const sc = g > 0 ? Gd : '#FFB0D0';
+  const frames = [];
+  for (let row = 0; row < numRows; row++) {
+    for (let col = 0; col < numCols; col++) {
+      const rb = rowBounds[row], cb = colBounds[col];
+      frames.push({ sx: cb.minX, sy: rb.minY, sw: cb.maxX - cb.minX, sh: rb.maxY - rb.minY });
+    }
+  }
+  return frames;
+}
 
-  const f = (x, y, w, h, c) => {
-    ctx.fillStyle = c;
-    ctx.fillRect(ox + x*S, oy + y*S, w*S, h*S);
+// Sprite cache — load once, resolve all pending callbacks
+let _sprite = null;
+const _pending = [];
+let _loading = false;
+
+function loadSprite(cb) {
+  if (_sprite)   { cb(_sprite); return; }
+  _pending.push(cb);
+  if (_loading)  return;
+  _loading = true;
+
+  const img = new Image();
+  img.src = SPRITE_PATH;
+  img.onload = () => {
+    const oc = document.createElement('canvas');
+    oc.width = img.naturalWidth; oc.height = img.naturalHeight;
+    const ctx = oc.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, 0, 0);
+    _sprite = { img, frames: detectFrames(oc, ctx, 7, 4) };
+    console.log('[CatSprite] sheet loaded, detected', _sprite.frames.length, 'frames');
+    _pending.forEach(fn => fn(_sprite));
+    _pending.length = 0;
   };
-
-  // Glow halo (evolve)
-  if (g > 0) {
-    ctx.save();
-    ctx.globalAlpha = Math.min(g * 0.08, 0.45);
-    ctx.fillStyle = '#FFD700';
-    const pad = (g + 1) * S;
-    ctx.fillRect(ox - pad, oy - pad, CW*S + pad*2, CH*S + pad*2);
-    ctx.restore();
-  }
-
-  // Sparkles — pixel diamond at each point
-  if (sp > 0) {
-    const pts = [[], [[-3,4],[25,2]], [[-3,4],[25,2],[-3,14],[25,14]],
-                 [[-3,4],[25,2],[-3,14],[25,14],[10,-2],[10,26]]][sp] || [];
-    ctx.fillStyle = sc;
-    pts.forEach(([sx, sy]) => {
-      ctx.fillRect(ox+(sx+1)*S, oy+sy*S,     S, S);
-      ctx.fillRect(ox+sx*S,     oy+(sy+1)*S, S, S);
-      ctx.fillRect(ox+(sx+2)*S, oy+(sy+1)*S, S, S);
-      ctx.fillRect(ox+(sx+1)*S, oy+(sy+2)*S, S, S);
-    });
-  }
-
-  // ── TAIL ──
-  if (droopTail) {
-    // Drooping / sad tail (hangs below body right)
-    f(17,15,2,1,Br); f(17,16,2,1,Br); f(18,17,2,1,Br);
-    f(19,18,2,1,Br); f(20,19,2,1,Br); f(20,20,1,1,Br);
-    f(19,21,2,1,Lb); f(18,22,2,1,Cr);
-  } else {
-    // Normal curling tail
-    f(17,17,2,1,Br); f(18,16,2,1,Br); f(19,15,2,1,Br);
-    f(20,14,2,1,Br); f(21,14,1,1,Br);
-    f(21,15,1,1,Br); f(20,16,1,1,Br); f(19,17,1,1,Br);
-    f(18,18,2,1,Br); f(17,19,3,1,Br); f(17,20,3,1,Br);
-    f(17,21,2,1,Lb); f(17,22,2,1,Cr);
-  }
-
-  // ── EARS ──
-  f(7,0,2,1,K);
-  f(6,1,3,1,K); f(7,1,1,1,Pk);
-  f(5,2,4,1,K); f(6,2,2,1,Pk);
-  f(13,0,2,1,K);
-  f(13,1,3,1,K); f(14,1,1,1,Pk);
-  f(13,2,4,1,K); f(14,2,2,1,Pk);
-
-  // ── HEAD silhouette + fill ──
-  f(4,3,14,1,K); f(3,4,1,10,K); f(18,4,1,10,K); f(4,14,14,1,K);
-  f(4,4,14,10,Br);
-
-  // Forehead tabby marks
-  f(7,4,2,1,D); f(11,4,2,1,D); f(15,4,2,1,D);
-  f(7,5,1,1,D); f(15,5,1,1,D);
-
-  // ── EYES ──
-  const lx=5, rx=13, ey=6;
-  if (eye === 'happy' || eye === 'shiny') {
-    // ^^ arc eyes
-    f(lx,8,1,1,K); f(lx+1,7,1,1,K); f(lx+2,6,1,1,K); f(lx+3,7,1,1,K); f(lx+4,8,1,1,K);
-    f(rx,8,1,1,K); f(rx+1,7,1,1,K); f(rx+2,6,1,1,K); f(rx+3,7,1,1,K); f(rx+4,8,1,1,K);
-    if (eye === 'shiny') { f(lx+1,6,1,1,Gd); f(rx+1,6,1,1,Gd); }
-  } else if (eye === 'closed') {
-    f(lx,8,5,1,K); f(rx,8,5,1,K);
-  } else if (eye === 'half') {
-    // Squinted — thin open slit
-    f(lx,7,5,1,K); f(lx,8,1,1,K); f(lx+1,8,3,1,Wh); f(lx+4,8,1,1,K); f(lx,9,5,1,K);
-    f(rx,7,5,1,K); f(rx,8,1,1,K); f(rx+1,8,3,1,Wh); f(rx+4,8,1,1,K); f(rx,9,5,1,K);
-  } else if (eye === 'droop') {
-    // Half-lidded sad: fur eyelid covers top 2 rows
-    const ew=4, eh=4;
-    f(lx,ey,ew,1,K); f(lx,ey+1,1,eh-1,K); f(lx+ew-1,ey+1,1,eh-1,K); f(lx,ey+eh,ew,1,K);
-    f(lx+1,ey+1,ew-2,eh-1,Wh); f(lx+1,ey+2,1,1,Ir); f(lx+1,ey+3,1,1,Pu);
-    f(lx,ey,ew,2,Br);
-    f(lx+1,ey-1,1,1,D); f(lx+2,ey-1,1,1,D);
-    f(rx,ey,ew,1,K); f(rx,ey+1,1,eh-1,K); f(rx+ew-1,ey+1,1,eh-1,K); f(rx,ey+eh,ew,1,K);
-    f(rx+1,ey+1,ew-2,eh-1,Wh); f(rx+1,ey+2,1,1,Ir); f(rx+1,ey+3,1,1,Pu);
-    f(rx,ey,ew,2,Br);
-    f(rx+1,ey-1,1,1,D); f(rx+2,ey-1,1,1,D);
-  } else {
-    // Open eyes: 4×4 box, 2×2 iris, highlight
-    const ew=4;
-    f(lx,ey,ew,1,K); f(lx,ey+1,1,3,K); f(lx+ew-1,ey+1,1,3,K); f(lx,ey+4,ew,1,K);
-    f(lx+1,ey+1,ew-2,3,Wh); f(lx+1,ey+1,2,2,Ir); f(lx+1,ey+2,1,1,Pu); f(lx+2,ey+1,1,1,Wh);
-    f(rx,ey,ew,1,K); f(rx,ey+1,1,3,K); f(rx+ew-1,ey+1,1,3,K); f(rx,ey+4,ew,1,K);
-    f(rx+1,ey+1,ew-2,3,Wh); f(rx+1,ey+1,2,2,Ir); f(rx+1,ey+2,1,1,Pu); f(rx+2,ey+1,1,1,Wh);
-  }
-
-  // ── NOSE ──
-  f(10,11,2,1,Pk); f(10,12,1,1,K); f(11,12,1,1,K);
-
-  // ── MOUTH ──
-  if (mo === 'open') {
-    f(9,12,1,1,K); f(12,12,1,1,K);
-    f(9,13,1,1,K); f(10,13,2,1,Pk); f(12,13,1,1,K);
-    f(10,14,2,1,K);
-  } else if (mo === 'frown') {
-    f(9,13,1,1,K); f(10,14,2,1,K); f(12,13,1,1,K);
-  } else if (mo === 'neutral') {
-    f(9,12,2,1,K); f(11,12,2,1,K);
-  } else {
-    f(9,12,1,1,K); f(10,13,2,1,K); f(12,12,1,1,K);
-  }
-
-  // Rosy cheeks (happy / shiny states)
-  if (eye === 'happy' || eye === 'shiny') {
-    f(4,12,2,1,Rs); f(16,12,2,1,Rs);
-  }
-
-  // ── WHISKERS ──
-  f(0,9,4,1,Wh); f(0,10,4,1,Wh); f(18,9,4,1,Wh); f(18,10,4,1,Wh);
-
-  // ── BODY silhouette + fill ──
-  f(4,14,14,1,K);
-  f(4,15,1,9,K); f(17,15,1,9,K);
-  f(4,24,14,1,K);
-  f(5,15,12,9,Br);
-  f(7,15,8,8,Cr);              // cream belly
-  f(5,16,2,2,D); f(15,16,2,2,D); // side tabby patches
-
-  // ── PAWS ──
-  f(5,25,5,1,K); f(6,26,3,1,Lb); f(5,26,1,1,K); f(9,26,1,1,K);
-  f(7,26,1,1,K); f(5,27,5,1,K);
-  f(12,25,5,1,K); f(13,26,3,1,Lb); f(12,26,1,1,K); f(16,26,1,1,K);
-  f(14,26,1,1,K); f(12,27,5,1,K);
+  img.onerror = () => console.error('[CatSprite] failed to load', SPRITE_PATH);
 }
 
-// Build (once) a 1536×1024 off-screen sprite sheet: 6 cols × 4 rows, 256px per frame
-let _sheet = null;
-function getSpriteSheet() {
-  if (_sheet) return _sheet;
-  const FRAME = 256, COLS = 6, ROWS = 4;
-  const c = document.createElement('canvas');
-  c.width  = FRAME * COLS;   // 1536
-  c.height = FRAME * ROWS;   // 1024
-  const ctx = c.getContext('2d');
-  ctx.imageSmoothingEnabled = false;
-  for (let i = 0; i < 24; i++) {
-    const col = i % COLS;
-    const row = Math.floor(i / COLS);
-    drawCatFrame(ctx, i, col * FRAME, row * FRAME, FRAME);
-  }
-  _sheet = c;
-  return c;
-}
-
-function PetCat({ state = 'idle', size = 128 }) {
-  const canvasRef = useRef(null);
-  const timerRef  = useRef(null);
-  const frameRef  = useRef(0);
-
+// Debug sub-component: draws all detected frames in a 7×4 grid at 80px each
+function DebugGrid({ sprite }) {
+  const refs = useRef([]);
   useEffect(() => {
-    const sheet = getSpriteSheet();
-    const cfg   = SPRITE_ANIM[state] || SPRITE_ANIM.idle;
-    frameRef.current = 0;
+    if (!sprite) return;
+    sprite.frames.forEach((f, i) => {
+      const el = refs.current[i];
+      if (!el) return;
+      const ctx = el.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, 80, 80);
+      ctx.drawImage(sprite.img, f.sx, f.sy, f.sw, f.sh, 0, 0, 80, 80);
+    });
+  }, [sprite]);
 
-    const draw = () => {
+  return React.createElement('div', {
+    style: { display: 'flex', flexWrap: 'wrap', gap: 2, padding: 8, background: '#e8e8e8', maxWidth: 580 }
+  },
+    (sprite ? sprite.frames : Array(28).fill(null)).map((f, i) =>
+      React.createElement('div', { key: i, style: { textAlign: 'center' } },
+        React.createElement('canvas', {
+          width: 80, height: 80,
+          style: { imageRendering: 'pixelated', display: 'block', border: '1px solid #ccc', background: '#fff' },
+          ref: el => { refs.current[i] = el; }
+        }),
+        React.createElement('div', { style: { fontSize: 9, color: '#555' } }, `#${i}`)
+      )
+    )
+  );
+}
+
+function PetCat({ state = 'idle', size = 160, debug = false }) {
+  const canvasRef   = useRef(null);
+  const timerRef    = useRef(null);
+  const frameIdxRef = useRef(0);
+  const [sprite, setSprite] = useState(null);
+
+  // Load sprite sheet once
+  useEffect(() => {
+    loadSprite(data => setSprite(data));
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, []);
+
+  // Re-animate whenever state or sprite changes
+  useEffect(() => {
+    if (!sprite) return;
+    if (timerRef.current) clearInterval(timerRef.current);
+    const anim = ANIMATIONS[state] || ANIMATIONS.idle;
+    frameIdxRef.current = 0;
+
+    const tick = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
-      ctx.imageSmoothingEnabled = false;   // ← critical: no bilinear blur
+      ctx.imageSmoothingEnabled = false;  // no bilinear blur
       ctx.clearRect(0, 0, size, size);
 
-      const fi  = cfg.start + frameRef.current;
-      const col = fi % 6;
-      const row = Math.floor(fi / 6);
-      const SRC = 256;
-      // drawImage: crop 256×256 from sheet → scale to size×size (2× scale-down)
-      ctx.drawImage(sheet, col*SRC, row*SRC, SRC, SRC, 0, 0, size, size);
+      const fi = anim.frames[frameIdxRef.current];
+      const f  = sprite.frames[fi];
+      if (f && f.sw > 0 && f.sh > 0) {
+        ctx.drawImage(sprite.img, f.sx, f.sy, f.sw, f.sh, 0, 0, size, size);
+      }
 
-      frameRef.current++;
-      if (frameRef.current >= cfg.count) {
-        frameRef.current = cfg.loop ? 0 : cfg.count - 1;
+      frameIdxRef.current++;
+      if (frameIdxRef.current >= anim.frames.length) {
+        if (anim.loop) {
+          frameIdxRef.current = 0;
+        } else {
+          clearInterval(timerRef.current);
+          frameIdxRef.current = anim.frames.length - 1;
+        }
       }
     };
 
-    draw();
-    timerRef.current = setInterval(draw, 1000 / cfg.fps);
+    tick();
+    timerRef.current = setInterval(tick, 1000 / anim.fps);
     return () => clearInterval(timerRef.current);
-  }, [state, size]);
+  }, [state, size, sprite]);
+
+  if (debug) {
+    return React.createElement(DebugGrid, { sprite });
+  }
 
   return React.createElement('canvas', {
     ref: canvasRef,
