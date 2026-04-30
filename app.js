@@ -75,190 +75,202 @@ function catSVG(state, size) {
   const evolve = state === 'evolve';
   const eating = happy || evolve;
 
-  // Pixel grid: S = scale factor (SVG units per logical pixel)
-  // Canvas: 20 x 26 logical pixels, centered in a 24x28 viewbox with 2px padding
+  // 22×28 logical-pixel grid, S SVG units per pixel
   const S = 5;
-  const OX = 2 * S; // x offset to center the 20px wide cat in 24px wide canvas
-  const OY = 1 * S; // y offset
+  const VW = 22 * S;   // 110
+  const VH = 28 * S;   // 140
 
-  // Color palette
-  const K  = '#2C1A08'; // dark outline
-  const Br = '#8B5E3C'; // medium brown fur
-  const Lb = '#C48A50'; // light brown fur
-  const Cr = '#F0D8A8'; // cream belly
-  const Pk = '#E87878'; // pink inner ear / nose
-  const Wh = '#FFFEF0'; // white eye highlight
-  const Ir = '#3A6030'; // iris green
-  const Pu = '#150800'; // pupil dark
-  const Gd = '#F8D020'; // gold (evolve)
-  const Rs = '#F0A080'; // rosy cheek
+  // Palette — warm brown tabby matching sprite sheet
+  const K  = '#1C0C00';  // dark outline
+  const D  = '#5C3010';  // dark stripe
+  const Br = '#9B5828';  // main fur brown
+  const Lb = '#C07838';  // light fur highlight
+  const Cr = '#F0D898';  // cream belly / ear inner
+  const Pk = '#D87060';  // pink nose / inner ear
+  const Wh = '#FFFEF8';  // white (eye)
+  const Ir = '#486040';  // iris green
+  const Pu = '#120600';  // pupil
+  const Rs = '#E09080';  // rosy cheek
+  const Gd = '#F8D020';  // gold sparkle (evolve)
 
-  // r(x, y, w, h, color) → SVG rect at logical pixel coords
-  function r(x, y, w, h, c) {
-    return `<rect x="${OX + x*S}" y="${OY + y*S}" width="${w*S}" height="${h*S}" fill="${c}"/>`;
-  }
+  const r = (x, y, w, h, c) =>
+    `<rect x="${x*S}" y="${y*S}" width="${w*S}" height="${h*S}" fill="${c}"/>`;
 
-  // Body animation wrapper style
+  // ── Animations ──
+  const cx = 11*S, cy = 19*S;
   const bodyAnim = eating
-    ? `animation:petBounce .5s steps(2) infinite;transform-origin:${OX+10*S}px ${OY+18*S}px;`
+    ? `animation:petBounce .5s steps(2) infinite;transform-origin:${cx}px ${cy}px;`
     : hungry
     ? `animation:petDroop 3s ease-in-out infinite;`
-    : `animation:petBreathe 3.5s ease-in-out infinite;transform-origin:${OX+10*S}px ${OY+18*S}px;`;
+    : `animation:petBreathe 3.5s ease-in-out infinite;transform-origin:${cx}px ${cy}px;`;
 
-  // Tail animation
   const tailAnim = eating
-    ? `transform-box:fill-box;transform-origin:0% 100%;animation:tailHappy .35s steps(2) infinite;`
+    ? `transform-box:fill-box;transform-origin:0% 50%;animation:tailHappy .4s steps(2) infinite;`
     : hungry
-    ? `transform-box:fill-box;transform-origin:0% 100%;animation:tailSad 3s ease-in-out infinite;`
-    : `transform-box:fill-box;transform-origin:0% 100%;animation:tailIdle 2.5s ease-in-out infinite;`;
+    ? `transform-box:fill-box;transform-origin:0% 50%;animation:tailSad 3s ease-in-out infinite;`
+    : `transform-box:fill-box;transform-origin:0% 50%;animation:tailIdle 2.5s ease-in-out infinite;`;
 
   const glowStyle = evolve ? 'animation:petGlow 1.2s ease-in-out infinite;' : '';
-  const sc = evolve ? Gd : '#FFB0C8';
+  const sc = evolve ? Gd : '#FFB0D0';
 
-  // Sparkle rects (pixel stars)
-  const sparkles = eating ? `
-    <g style="animation:sparkleAnim .8s steps(2) infinite 0s;transform-origin:${1*S}px ${5*S}px;">
-      ${r(-2,2,1,1,sc)}${r(-1,1,1,1,sc)}${r(-1,3,1,1,sc)}${r(0,2,1,1,sc)}
-    </g>
-    <g style="animation:sparkleAnim .8s steps(2) infinite .3s;transform-origin:${22*S}px ${4*S}px;">
-      ${r(21,1,1,1,sc)}${r(22,0,1,1,sc)}${r(22,2,1,1,sc)}${r(23,1,1,1,sc)}
-    </g>
-    <g style="animation:sparkleAnim .8s steps(2) infinite .6s;transform-origin:${2*S}px ${14*S}px;">
-      ${r(-1,12,1,1,sc)}${r(0,11,1,1,sc)}${r(0,13,1,1,sc)}${r(1,12,1,1,sc)}
-    </g>
-    <g style="animation:sparkleAnim .8s steps(2) infinite .15s;transform-origin:${21*S}px ${14*S}px;">
-      ${r(20,12,1,1,sc)}${r(21,11,1,1,sc)}${r(21,13,1,1,sc)}${r(22,12,1,1,sc)}
-    </g>
-  ` : '';
-
-  // ── Static cat pixels ─────────────────────────────────────────────
-
-  // Ears (rows 0-2)
-  const ears =
-    r(3,0,2,1,K) + r(15,0,2,1,K) +        // ear tips outline
-    r(3,1,2,2,Br) + r(15,1,2,2,Br) +      // outer ear
-    r(4,1,1,1,Pk) + r(15,1,1,1,Pk);       // inner ear pink
-
-  // Head outline (rows 2-9, 14px wide)
-  const headOutline =
-    r(3,2,14,1,K) +   // top of head
-    r(2,3,1,6,K) + r(17,3,1,6,K) +  // sides
-    r(2,9,1,1,K) + r(17,9,1,1,K);
-
-  // Head fill (rows 3-8)
-  const headFill =
-    r(3,3,14,6,Br);   // main head fur
-
-  // Forehead stripe detail
-  const forehead =
-    r(8,3,1,1,Lb) + r(11,3,1,1,Lb);  // subtle lighter pixels
-
-  // Eyes — state dependent
-  let eyes = '';
-  if (eating) {
-    // ^ crescent happy eyes (3 pixels wide)
-    eyes =
-      r(5,5,1,1,K) + r(6,4,1,1,K) + r(7,5,1,1,K) +   // left ^
-      r(12,5,1,1,K) + r(13,4,1,1,K) + r(14,5,1,1,K);  // right ^
-  } else if (hungry) {
-    // half-lidded eyes: white box bottom half visible
-    eyes =
-      // left eye box
-      r(5,5,3,2,Wh) + r(5,5,3,1,Br) +  // lid covers top half
-      r(5,5,3,2,K) + r(6,5,1,1,Ir) +   // outline + iris
-      // right eye box
-      r(12,5,3,2,Wh) + r(12,5,3,1,Br) +
-      r(12,5,3,2,K) + r(13,5,1,1,Ir) +
-      // worried inner brow marks
-      r(6,4,1,1,K) + r(13,4,1,1,K);
-  } else {
-    // idle: open square eyes with iris + blink handled by animation on a group
-    eyes =
-      // left eye: 3x3 white box with dark outline
-      r(4,4,4,1,K) + r(4,5,4,3,K) +  // outline rows
-      r(5,5,2,2,Wh) +                 // white fill
-      r(5,5,1,1,Ir) + r(6,5,1,1,Pu) +// iris + pupil
-      r(6,4,1,1,Wh) +                 // top shine
-      // right eye
-      r(11,4,4,1,K) + r(11,5,4,3,K) +
-      r(12,5,2,2,Wh) +
-      r(12,5,1,1,Ir) + r(13,5,1,1,Pu) +
-      r(13,4,1,1,Wh);
-  }
-
-  // Nose
-  const nose = r(9,7,2,1,Pk);
-
-  // Mouth — state dependent
-  let mouth = '';
-  if (eating) {
-    // open O shape
-    mouth = r(8,8,1,1,K) + r(9,8,2,1,K) + r(11,8,1,1,K) +
-            r(8,9,1,1,K) + r(9,9,2,1,Wh) + r(11,9,1,1,K) +
-            r(8,10,1,1,K) + r(9,10,2,1,K) + r(11,10,1,1,K);
-  } else if (hungry) {
-    // frown
-    mouth = r(8,9,1,1,K) + r(9,10,2,1,K) + r(11,9,1,1,K);
-  } else {
-    // smile
-    mouth = r(8,8,1,1,K) + r(9,9,2,1,K) + r(11,8,1,1,K);
-  }
-
-  // Whiskers
-  const whiskers =
-    r(0,6,3,1,Wh) + r(0,7,3,1,Wh) +   // left whiskers
-    r(17,6,3,1,Wh) + r(17,7,3,1,Wh);  // right whiskers
-
-  // Blush (eating/happy only)
-  const blush = eating
-    ? r(3,7,2,1,Rs) + r(15,7,2,1,Rs)
+  // Pixel sparkle cross (4-dot diamond)
+  const sp = (x, y, d) =>
+    `<g style="animation:sparkleAnim .8s steps(2) infinite ${d}s">` +
+    r(x,y+1,1,1,sc) + r(x+1,y,1,1,sc) + r(x+1,y+2,1,1,sc) + r(x+2,y+1,1,1,sc) +
+    `</g>`;
+  const sparkles = eating
+    ? sp(-1,2,0) + sp(20,0,0.25) + sp(-1,14,0.5) + sp(20,13,0.75)
     : '';
 
-  // Head bottom outline (connects to neck)
-  const headBottom =
-    r(3,9,14,1,K) +  // bottom of head
-    r(5,10,10,1,Br); // neck
+  // ── TAIL (drawn first, sits behind body) ──
+  // Curls up from body-right then back down, tip slightly lighter
+  const tail =
+    r(17,17,2,1,Br) + r(18,16,2,1,Br) + r(19,15,2,1,Br) +  // rising right
+    r(20,14,2,1,Br) + r(21,14,1,1,Br) +                      // top of curl
+    r(21,15,1,1,Br) + r(20,16,1,1,Br) + r(19,17,1,1,Br) +   // descending
+    r(18,18,2,1,Br) + r(17,19,3,1,Br) + r(17,20,3,1,Br) +   // curling under
+    r(17,21,2,1,Lb) + r(17,22,2,1,Cr);                       // pale tip
 
-  // Body (rows 11-20)
-  const body =
-    r(4,11,12,1,K) +    // shoulder top outline
-    r(3,12,1,7,K) + r(16,12,1,7,K) +  // body sides
-    r(4,12,12,7,Br) +   // body fur
-    r(6,13,8,5,Cr) +    // cream belly
-    r(3,19,14,1,K);     // body bottom
+  // ── EARS ──
+  // Left ear — triangular, pink inner ear, centered at col 7
+  const leftEar =
+    r(7,0,2,1,K) +                      // 2px tip
+    r(6,1,3,1,K) + r(7,1,1,1,Pk) +     // row 1: outline + 1px pink
+    r(5,2,4,1,K) + r(6,2,2,1,Pk);      // row 2: wider + 2px pink (ear base)
 
-  // Front paws (rows 20-22)
+  // Right ear — mirrored, centered at col 14
+  const rightEar =
+    r(13,0,2,1,K) +
+    r(13,1,3,1,K) + r(14,1,1,1,Pk) +
+    r(13,2,4,1,K) + r(14,2,2,1,Pk);
+
+  // ── HEAD ──
+  // Silhouette outline: 16px wide (cols 3–18), 12px tall (rows 3–14)
+  const headSil =
+    r(4,3,14,1,K) +                      // top
+    r(3,4,1,10,K) + r(18,4,1,10,K) +    // sides
+    r(4,14,14,1,K);                      // chin (shares row with body top)
+
+  // Head interior fill (1px inside silhouette)
+  const headFill = r(4,4,14,10,Br);
+
+  // Forehead tabby stripes — 3 small vertical marks
+  const headStripes =
+    r(7,4,2,1,D)  + r(11,4,2,1,D) + r(15,4,2,1,D) +  // 3 horizontal dabs
+    r(7,5,1,1,D)  + r(15,5,1,1,D);                     // continued on row 5
+
+  // ── EYES ──
+  const lx = 5, rx = 13, ey = 6;   // left-eye x, right-eye x, y start
+  let eyes = '';
+
+  if (eating) {
+    // ^^ happy arc eyes
+    eyes =
+      r(lx,8,1,1,K) + r(lx+1,7,1,1,K) + r(lx+2,6,1,1,K) + r(lx+3,7,1,1,K) + r(lx+4,8,1,1,K) +
+      r(rx,8,1,1,K) + r(rx+1,7,1,1,K) + r(rx+2,6,1,1,K) + r(rx+3,7,1,1,K) + r(rx+4,8,1,1,K);
+  } else if (hungry) {
+    // Half-lidded droopy eyes: fur eyelid covers top 2 rows of eye box
+    const ew = 4, eh = 4;
+    eyes =
+      // left eye box outline
+      r(lx,ey,ew,1,K) + r(lx,ey+1,1,eh-1,K) + r(lx+ew-1,ey+1,1,eh-1,K) + r(lx,ey+eh,ew,1,K) +
+      r(lx+1,ey+1,ew-2,eh-1,Wh) +          // white fill (lower portion)
+      r(lx+1,ey+2,1,1,Ir) + r(lx+1,ey+3,1,1,Pu) +   // iris + pupil (low)
+      r(lx,ey,ew,2,Br) +                    // fur eyelid on top
+      r(lx+1,ey-1,1,1,D) + r(lx+2,ey-1,1,1,D) +      // worried inner brow
+      // right eye box outline
+      r(rx,ey,ew,1,K) + r(rx,ey+1,1,eh-1,K) + r(rx+ew-1,ey+1,1,eh-1,K) + r(rx,ey+eh,ew,1,K) +
+      r(rx+1,ey+1,ew-2,eh-1,Wh) +
+      r(rx+1,ey+2,1,1,Ir) + r(rx+1,ey+3,1,1,Pu) +
+      r(rx,ey,ew,2,Br) +
+      r(rx+1,ey-1,1,1,D) + r(rx+2,ey-1,1,1,D);
+  } else {
+    // Open idle eyes: 4×4 box, 2×2 iris, shine, wrapped in blink group
+    const ew = 4;
+    const lEye =
+      r(lx,ey,ew,1,K) + r(lx,ey+1,1,3,K) + r(lx+ew-1,ey+1,1,3,K) + r(lx,ey+4,ew,1,K) +
+      r(lx+1,ey+1,ew-2,3,Wh) +
+      r(lx+1,ey+1,2,2,Ir) + r(lx+1,ey+2,1,1,Pu) + r(lx+2,ey+1,1,1,Wh);
+    const rEye =
+      r(rx,ey,ew,1,K) + r(rx,ey+1,1,3,K) + r(rx+ew-1,ey+1,1,3,K) + r(rx,ey+4,ew,1,K) +
+      r(rx+1,ey+1,ew-2,3,Wh) +
+      r(rx+1,ey+1,2,2,Ir) + r(rx+1,ey+2,1,1,Pu) + r(rx+2,ey+1,1,1,Wh);
+    const bL = `animation:petBlink 5s ease-in-out infinite;transform-origin:${(lx+2)*S}px ${(ey+2)*S}px;`;
+    const bR = `animation:petBlink 5s ease-in-out infinite .15s;transform-origin:${(rx+2)*S}px ${(ey+2)*S}px;`;
+    eyes = `<g style="${bL}">${lEye}</g><g style="${bR}">${rEye}</g>`;
+  }
+
+  // ── NOSE ──
+  // 2px pink dot centered under eyes
+  const nose = r(10,11,2,1,Pk) + r(10,12,1,1,K) + r(11,12,1,1,K);
+
+  // ── MOUTH ──
+  let mouth = '';
+  if (eating) {
+    // Open oval mouth with pink inside
+    mouth =
+      r(9,12,1,1,K) + r(12,12,1,1,K) +
+      r(9,13,1,1,K) + r(10,13,2,1,Pk) + r(12,13,1,1,K) +
+      r(10,14,2,1,K);
+  } else if (hungry) {
+    // Frown (inverted smile)
+    mouth = r(9,13,1,1,K) + r(10,14,2,1,K) + r(12,13,1,1,K);
+  } else {
+    // Smile
+    mouth = r(9,12,1,1,K) + r(10,13,2,1,K) + r(12,12,1,1,K);
+  }
+
+  // ── BLUSH ──
+  const blush = eating ? r(4,12,2,1,Rs) + r(16,12,2,1,Rs) : '';
+
+  // ── WHISKERS — 2 rows per side ──
+  const whiskers =
+    r(0,9,4,1,Wh) + r(0,10,4,1,Wh) +    // left
+    r(18,9,4,1,Wh) + r(18,10,4,1,Wh);   // right
+
+  // ── BODY (shares top K line with head chin at row 14) ──
+  const bodySil =
+    r(4,14,14,1,K) +                      // top (= head chin)
+    r(4,15,1,9,K) + r(17,15,1,9,K) +     // sides
+    r(4,24,14,1,K);                       // bottom
+
+  const bodyFill = r(5,15,12,9,Br);       // fur
+  const belly    = r(7,15,8,8,Cr);        // cream belly patch
+
+  // Side tabby patches on body
+  const bodyStripes = r(5,16,2,2,D) + r(15,16,2,2,D);
+
+  // ── PAWS (rows 25-27) ──
   const paws =
-    r(4,20,4,2,Br) + r(12,20,4,2,Br) + // paw tops
-    r(4,22,4,1,K) + r(12,22,4,1,K) +   // paw bottom outline
-    r(5,21,1,1,K) + r(6,21,1,1,K) + r(7,21,1,1,K) +   // left paw toes
-    r(13,21,1,1,K) + r(14,21,1,1,K) + r(15,21,1,1,K);  // right paw toes
+    // Left paw — 5px wide
+    r(5,25,5,1,K) +
+    r(5,26,1,1,K) + r(5,26,3,1,Lb) + r(8,26,2,1,K) +   // outline + fill
+    r(6,26,1,1,K) + r(7,26,1,1,K) +                      // toe dividers
+    r(5,27,5,1,K) +
+    // Right paw — 5px wide
+    r(12,25,5,1,K) +
+    r(12,26,1,1,K) + r(12,26,3,1,Lb) + r(15,26,2,1,K) +
+    r(13,26,1,1,K) + r(14,26,1,1,K) +
+    r(12,27,5,1,K);
 
-  // Tail (right side, rows 15-23)
-  const tailPixels =
-    r(17,15,2,1,Br) + r(18,16,2,1,Br) + r(19,17,2,1,Br) +
-    r(19,18,2,1,Br) + r(18,19,2,1,Br) + r(17,20,2,1,Br) +
-    r(17,21,3,1,Br) + r(17,22,2,1,Cr); // tip
-
-  const viewW = (24) * S;
-  const viewH = (28) * S;
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewW} ${viewH}" width="${size}" height="${size}"
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${VW} ${VH}" width="${size}" height="${size}"
     style="image-rendering:pixelated;image-rendering:crisp-edges;${glowStyle}">
   ${sparkles}
   <g style="${bodyAnim}">
-    <g style="${tailAnim}">${tailPixels}</g>
-    ${ears}
-    ${headOutline}
+    <g style="${tailAnim}">${tail}</g>
+    ${leftEar}${rightEar}
+    ${headSil}
     ${headFill}
-    ${forehead}
+    ${headStripes}
     ${eyes}
     ${nose}
     ${mouth}
-    ${whiskers}
     ${blush}
-    ${headBottom}
-    ${body}
+    ${whiskers}
+    ${bodySil}
+    ${bodyFill}
+    ${belly}
+    ${bodyStripes}
     ${paws}
   </g>
 </svg>`;
