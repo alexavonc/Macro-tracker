@@ -75,111 +75,191 @@ function catSVG(state, size) {
   const evolve = state === 'evolve';
   const eating = happy || evolve;
 
+  // Pixel grid: S = scale factor (SVG units per logical pixel)
+  // Canvas: 20 x 26 logical pixels, centered in a 24x28 viewbox with 2px padding
+  const S = 5;
+  const OX = 2 * S; // x offset to center the 20px wide cat in 24px wide canvas
+  const OY = 1 * S; // y offset
+
+  // Color palette
+  const K  = '#2C1A08'; // dark outline
+  const Br = '#8B5E3C'; // medium brown fur
+  const Lb = '#C48A50'; // light brown fur
+  const Cr = '#F0D8A8'; // cream belly
+  const Pk = '#E87878'; // pink inner ear / nose
+  const Wh = '#FFFEF0'; // white eye highlight
+  const Ir = '#3A6030'; // iris green
+  const Pu = '#150800'; // pupil dark
+  const Gd = '#F8D020'; // gold (evolve)
+  const Rs = '#F0A080'; // rosy cheek
+
+  // r(x, y, w, h, color) → SVG rect at logical pixel coords
+  function r(x, y, w, h, c) {
+    return `<rect x="${OX + x*S}" y="${OY + y*S}" width="${w*S}" height="${h*S}" fill="${c}"/>`;
+  }
+
+  // Body animation wrapper style
   const bodyAnim = eating
-    ? 'animation:petBounce .45s ease-in-out infinite;transform-origin:50px 86px;'
+    ? `animation:petBounce .5s steps(2) infinite;transform-origin:${OX+10*S}px ${OY+18*S}px;`
     : hungry
-    ? 'animation:petDroop 4s ease-in-out infinite;'
-    : 'animation:petBreathe 3.5s ease-in-out infinite;transform-origin:50px 86px;';
+    ? `animation:petDroop 3s ease-in-out infinite;`
+    : `animation:petBreathe 3.5s ease-in-out infinite;transform-origin:${OX+10*S}px ${OY+18*S}px;`;
 
+  // Tail animation
   const tailAnim = eating
-    ? 'transform-box:fill-box;transform-origin:100% 100%;animation:tailHappy .35s ease-in-out infinite;'
+    ? `transform-box:fill-box;transform-origin:0% 100%;animation:tailHappy .35s steps(2) infinite;`
     : hungry
-    ? 'transform-box:fill-box;transform-origin:100% 100%;animation:tailSad 4s ease-in-out infinite;'
-    : 'transform-box:fill-box;transform-origin:100% 100%;animation:tailIdle 2.5s ease-in-out infinite;';
-
-  const eyes = eating ? `
-    <path d="M30,46 Q38,38 46,46" stroke="#2C1810" stroke-width="3.5" fill="none" stroke-linecap="round"/>
-    <path d="M54,46 Q62,38 70,46" stroke="#2C1810" stroke-width="3.5" fill="none" stroke-linecap="round"/>
-  ` : hungry ? `
-    <ellipse cx="38" cy="46" rx="8" ry="7" fill="#2C1810"/>
-    <ellipse cx="38" cy="46" rx="5.5" ry="5" fill="#7A3B12"/>
-    <circle cx="40.5" cy="43" r="2" fill="white"/>
-    <path d="M30,40 Q38,37 46,40 L46,47 Q38,44 30,47 Z" fill="#E8943A"/>
-    <path d="M30,47 Q38,44 46,47" stroke="#D4822A" stroke-width="1" fill="none"/>
-    <ellipse cx="62" cy="46" rx="8" ry="7" fill="#2C1810"/>
-    <ellipse cx="62" cy="46" rx="5.5" ry="5" fill="#7A3B12"/>
-    <circle cx="64.5" cy="43" r="2" fill="white"/>
-    <path d="M54,40 Q62,37 70,40 L70,47 Q62,44 54,47 Z" fill="#E8943A"/>
-    <path d="M54,47 Q62,44 70,47" stroke="#D4822A" stroke-width="1" fill="none"/>
-    <line x1="34" y1="38" x2="36" y2="34" stroke="#D4822A" stroke-width="2" stroke-linecap="round"/>
-    <line x1="66" y1="38" x2="64" y2="34" stroke="#D4822A" stroke-width="2" stroke-linecap="round"/>
-  ` : `
-    <g style="animation:petBlink 5s ease-in-out infinite;transform-origin:38px 44px;">
-      <ellipse cx="38" cy="44" rx="8" ry="9" fill="#2C1810"/>
-      <ellipse cx="38" cy="44" rx="5.5" ry="6.5" fill="#7A3B12"/>
-      <circle cx="40.5" cy="40.5" r="2.5" fill="white"/>
-      <circle cx="37" cy="48" r="1.2" fill="white" opacity="0.5"/>
-    </g>
-    <g style="animation:petBlink 5s ease-in-out infinite .15s;transform-origin:62px 44px;">
-      <ellipse cx="62" cy="44" rx="8" ry="9" fill="#2C1810"/>
-      <ellipse cx="62" cy="44" rx="5.5" ry="6.5" fill="#7A3B12"/>
-      <circle cx="64.5" cy="40.5" r="2.5" fill="white"/>
-      <circle cx="61" cy="48" r="1.2" fill="white" opacity="0.5"/>
-    </g>
-  `;
-
-  const mouth = eating ? `
-    <path d="M44,58 Q50,66 56,58" stroke="#C06060" stroke-width="2.2" fill="none" stroke-linecap="round"/>
-    <path d="M47,59 L47,62 Q50,64 53,62 L53,59" fill="white" opacity="0.85"/>
-  ` : hungry ? `
-    <path d="M46.5,61 Q50,57.5 53.5,61" stroke="#C06060" stroke-width="1.8" fill="none" stroke-linecap="round"/>
-  ` : `
-    <path d="M46,58 Q50,62.5 54,58" stroke="#C06060" stroke-width="1.8" fill="none" stroke-linecap="round"/>
-  `;
-
-  const sc1 = evolve ? '#FFD700' : '#FFB6C1';
-  const sc2 = evolve ? '#FFA500' : '#FF69B4';
-  const sparkles = eating ? `
-    <g style="animation:sparkleAnim .8s ease-in-out infinite 0s;transform-origin:10px 30px;"><text x="4" y="36" font-size="13" fill="${sc1}">✦</text></g>
-    <g style="animation:sparkleAnim .8s ease-in-out infinite .2s;transform-origin:86px 22px;"><text x="80" y="28" font-size="11" fill="${sc1}">✦</text></g>
-    <g style="animation:sparkleAnim .8s ease-in-out infinite .4s;transform-origin:4px 60px;"><text x="-1" y="66" font-size="9" fill="${sc2}">✦</text></g>
-    <g style="animation:sparkleAnim .8s ease-in-out infinite .6s;transform-origin:92px 56px;"><text x="88" y="62" font-size="9" fill="${sc2}">✦</text></g>
-    <g style="animation:sparkleAnim .8s ease-in-out infinite .3s;transform-origin:18px 18px;"><text x="13" y="24" font-size="10" fill="${sc1}">✦</text></g>
-    <g style="animation:sparkleAnim .8s ease-in-out infinite .5s;transform-origin:79px 18px;"><text x="74" y="24" font-size="10" fill="${sc1}">✦</text></g>
-  ` : '';
+    ? `transform-box:fill-box;transform-origin:0% 100%;animation:tailSad 3s ease-in-out infinite;`
+    : `transform-box:fill-box;transform-origin:0% 100%;animation:tailIdle 2.5s ease-in-out infinite;`;
 
   const glowStyle = evolve ? 'animation:petGlow 1.2s ease-in-out infinite;' : '';
-  const blush = eating ? 0.6 : 0.35;
+  const sc = evolve ? Gd : '#FFB0C8';
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" width="${size}" height="${size}" style="${glowStyle}">
+  // Sparkle rects (pixel stars)
+  const sparkles = eating ? `
+    <g style="animation:sparkleAnim .8s steps(2) infinite 0s;transform-origin:${1*S}px ${5*S}px;">
+      ${r(-2,2,1,1,sc)}${r(-1,1,1,1,sc)}${r(-1,3,1,1,sc)}${r(0,2,1,1,sc)}
+    </g>
+    <g style="animation:sparkleAnim .8s steps(2) infinite .3s;transform-origin:${22*S}px ${4*S}px;">
+      ${r(21,1,1,1,sc)}${r(22,0,1,1,sc)}${r(22,2,1,1,sc)}${r(23,1,1,1,sc)}
+    </g>
+    <g style="animation:sparkleAnim .8s steps(2) infinite .6s;transform-origin:${2*S}px ${14*S}px;">
+      ${r(-1,12,1,1,sc)}${r(0,11,1,1,sc)}${r(0,13,1,1,sc)}${r(1,12,1,1,sc)}
+    </g>
+    <g style="animation:sparkleAnim .8s steps(2) infinite .15s;transform-origin:${21*S}px ${14*S}px;">
+      ${r(20,12,1,1,sc)}${r(21,11,1,1,sc)}${r(21,13,1,1,sc)}${r(22,12,1,1,sc)}
+    </g>
+  ` : '';
+
+  // ── Static cat pixels ─────────────────────────────────────────────
+
+  // Ears (rows 0-2)
+  const ears =
+    r(3,0,2,1,K) + r(15,0,2,1,K) +        // ear tips outline
+    r(3,1,2,2,Br) + r(15,1,2,2,Br) +      // outer ear
+    r(4,1,1,1,Pk) + r(15,1,1,1,Pk);       // inner ear pink
+
+  // Head outline (rows 2-9, 14px wide)
+  const headOutline =
+    r(3,2,14,1,K) +   // top of head
+    r(2,3,1,6,K) + r(17,3,1,6,K) +  // sides
+    r(2,9,1,1,K) + r(17,9,1,1,K);
+
+  // Head fill (rows 3-8)
+  const headFill =
+    r(3,3,14,6,Br);   // main head fur
+
+  // Forehead stripe detail
+  const forehead =
+    r(8,3,1,1,Lb) + r(11,3,1,1,Lb);  // subtle lighter pixels
+
+  // Eyes — state dependent
+  let eyes = '';
+  if (eating) {
+    // ^ crescent happy eyes (3 pixels wide)
+    eyes =
+      r(5,5,1,1,K) + r(6,4,1,1,K) + r(7,5,1,1,K) +   // left ^
+      r(12,5,1,1,K) + r(13,4,1,1,K) + r(14,5,1,1,K);  // right ^
+  } else if (hungry) {
+    // half-lidded eyes: white box bottom half visible
+    eyes =
+      // left eye box
+      r(5,5,3,2,Wh) + r(5,5,3,1,Br) +  // lid covers top half
+      r(5,5,3,2,K) + r(6,5,1,1,Ir) +   // outline + iris
+      // right eye box
+      r(12,5,3,2,Wh) + r(12,5,3,1,Br) +
+      r(12,5,3,2,K) + r(13,5,1,1,Ir) +
+      // worried inner brow marks
+      r(6,4,1,1,K) + r(13,4,1,1,K);
+  } else {
+    // idle: open square eyes with iris + blink handled by animation on a group
+    eyes =
+      // left eye: 3x3 white box with dark outline
+      r(4,4,4,1,K) + r(4,5,4,3,K) +  // outline rows
+      r(5,5,2,2,Wh) +                 // white fill
+      r(5,5,1,1,Ir) + r(6,5,1,1,Pu) +// iris + pupil
+      r(6,4,1,1,Wh) +                 // top shine
+      // right eye
+      r(11,4,4,1,K) + r(11,5,4,3,K) +
+      r(12,5,2,2,Wh) +
+      r(12,5,1,1,Ir) + r(13,5,1,1,Pu) +
+      r(13,4,1,1,Wh);
+  }
+
+  // Nose
+  const nose = r(9,7,2,1,Pk);
+
+  // Mouth — state dependent
+  let mouth = '';
+  if (eating) {
+    // open O shape
+    mouth = r(8,8,1,1,K) + r(9,8,2,1,K) + r(11,8,1,1,K) +
+            r(8,9,1,1,K) + r(9,9,2,1,Wh) + r(11,9,1,1,K) +
+            r(8,10,1,1,K) + r(9,10,2,1,K) + r(11,10,1,1,K);
+  } else if (hungry) {
+    // frown
+    mouth = r(8,9,1,1,K) + r(9,10,2,1,K) + r(11,9,1,1,K);
+  } else {
+    // smile
+    mouth = r(8,8,1,1,K) + r(9,9,2,1,K) + r(11,8,1,1,K);
+  }
+
+  // Whiskers
+  const whiskers =
+    r(0,6,3,1,Wh) + r(0,7,3,1,Wh) +   // left whiskers
+    r(17,6,3,1,Wh) + r(17,7,3,1,Wh);  // right whiskers
+
+  // Blush (eating/happy only)
+  const blush = eating
+    ? r(3,7,2,1,Rs) + r(15,7,2,1,Rs)
+    : '';
+
+  // Head bottom outline (connects to neck)
+  const headBottom =
+    r(3,9,14,1,K) +  // bottom of head
+    r(5,10,10,1,Br); // neck
+
+  // Body (rows 11-20)
+  const body =
+    r(4,11,12,1,K) +    // shoulder top outline
+    r(3,12,1,7,K) + r(16,12,1,7,K) +  // body sides
+    r(4,12,12,7,Br) +   // body fur
+    r(6,13,8,5,Cr) +    // cream belly
+    r(3,19,14,1,K);     // body bottom
+
+  // Front paws (rows 20-22)
+  const paws =
+    r(4,20,4,2,Br) + r(12,20,4,2,Br) + // paw tops
+    r(4,22,4,1,K) + r(12,22,4,1,K) +   // paw bottom outline
+    r(5,21,1,1,K) + r(6,21,1,1,K) + r(7,21,1,1,K) +   // left paw toes
+    r(13,21,1,1,K) + r(14,21,1,1,K) + r(15,21,1,1,K);  // right paw toes
+
+  // Tail (right side, rows 15-23)
+  const tailPixels =
+    r(17,15,2,1,Br) + r(18,16,2,1,Br) + r(19,17,2,1,Br) +
+    r(19,18,2,1,Br) + r(18,19,2,1,Br) + r(17,20,2,1,Br) +
+    r(17,21,3,1,Br) + r(17,22,2,1,Cr); // tip
+
+  const viewW = (24) * S;
+  const viewH = (28) * S;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewW} ${viewH}" width="${size}" height="${size}"
+    style="image-rendering:pixelated;image-rendering:crisp-edges;${glowStyle}">
   ${sparkles}
   <g style="${bodyAnim}">
-    <g style="${tailAnim}">
-      <path d="M32,88 C10,84 4,68 18,58" stroke="#E8943A" stroke-width="12" fill="none" stroke-linecap="round"/>
-      <path d="M32,88 C10,84 4,68 18,58" stroke="#D4822A" stroke-width="4"  fill="none" stroke-linecap="round" stroke-dasharray="7 9" opacity="0.5"/>
-      <circle cx="18" cy="58" r="7" fill="#E8943A"/>
-      <circle cx="18" cy="58" r="4" fill="#F0C870"/>
-    </g>
-    <ellipse cx="50" cy="86" rx="26" ry="21" fill="#E8943A"/>
-    <ellipse cx="50" cy="90" rx="16" ry="14" fill="#F0C870"/>
-    <path d="M36,80 Q50,77 64,80" stroke="#D4822A" stroke-width="2.5" fill="none" opacity="0.4" stroke-linecap="round"/>
-    <ellipse cx="34" cy="103" rx="13" ry="7.5" fill="#E8943A"/>
-    <circle cx="29" cy="107" r="2.8" fill="#E08080"/>
-    <circle cx="34" cy="108.5" r="2.8" fill="#E08080"/>
-    <circle cx="39" cy="107" r="2.8" fill="#E08080"/>
-    <ellipse cx="66" cy="103" rx="13" ry="7.5" fill="#E8943A"/>
-    <circle cx="61" cy="107" r="2.8" fill="#E08080"/>
-    <circle cx="66" cy="108.5" r="2.8" fill="#E08080"/>
-    <circle cx="71" cy="107" r="2.8" fill="#E08080"/>
-    <circle cx="50" cy="46" r="28" fill="#E8943A"/>
-    <polygon points="18,34 21,8 41,30" fill="#E8943A"/>
-    <polygon points="23,31 26,13 39,29" fill="#F4A0B8"/>
-    <polygon points="82,34 79,8 59,30" fill="#E8943A"/>
-    <polygon points="77,31 74,13 61,29" fill="#F4A0B8"/>
-    <path d="M40,22 Q50,18 60,22" stroke="#D4822A" stroke-width="2.5" fill="none" opacity="0.55" stroke-linecap="round"/>
-    <path d="M37,16 Q50,12 63,16" stroke="#D4822A" stroke-width="2"   fill="none" opacity="0.35" stroke-linecap="round"/>
+    <g style="${tailAnim}">${tailPixels}</g>
+    ${ears}
+    ${headOutline}
+    ${headFill}
+    ${forehead}
     ${eyes}
-    <path d="M47.5,53.5 L50,57 L52.5,53.5 Z" fill="#E07878"/>
-    <circle cx="49" cy="54.5" r="1" fill="rgba(255,255,255,0.5)"/>
+    ${nose}
     ${mouth}
-    <ellipse cx="26" cy="53" rx="8" ry="5" fill="#F4A0A0" opacity="${blush}"/>
-    <ellipse cx="74" cy="53" rx="8" ry="5" fill="#F4A0A0" opacity="${blush}"/>
-    <line x1="12" y1="51"  x2="37" y2="53.5" stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
-    <line x1="10" y1="55"  x2="37" y2="55"   stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
-    <line x1="12" y1="59"  x2="37" y2="56.5" stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
-    <line x1="88" y1="51"  x2="63" y2="53.5" stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
-    <line x1="90" y1="55"  x2="63" y2="55"   stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
-    <line x1="88" y1="59"  x2="63" y2="56.5" stroke="rgba(255,248,240,.9)" stroke-width="1.3"/>
+    ${whiskers}
+    ${blush}
+    ${headBottom}
+    ${body}
+    ${paws}
   </g>
 </svg>`;
 }
