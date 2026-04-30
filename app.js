@@ -58,6 +58,10 @@ const DEFAULT_GOALS = { protein: 150, carbs: 200, fat: 65, calories: 2000 };
 // Row 4 (frames 21-27): dead (unused in this app — mapped to happy)
 
 const SPRITE_PATH = '/assets/cat-sprite.png';
+const SHEET_W  = 1536;
+const SHEET_H  = 1024;
+const NUM_COLS = 7;
+const NUM_ROWS = 4;
 
 const ANIMATIONS = {
   idle:   { frames: [0,1,2,3,4,5],       fps: 1.5, loop: true  },
@@ -66,120 +70,36 @@ const ANIMATIONS = {
   happy:  { frames: [14,15,16,17],       fps: 3,   loop: true  },
 };
 
-// Fixed-grid frame extractor — one cell per frame, row-major order.
-// Drawing code scales each cell to fit the canvas while preserving aspect ratio.
-function buildFrames(imgWidth, imgHeight, numCols, numRows) {
-  const cellW = imgWidth  / numCols;
-  const cellH = imgHeight / numRows;
-  const frames = [];
-  for (let row = 0; row < numRows; row++) {
-    for (let col = 0; col < numCols; col++) {
-      frames.push({
-        sx: Math.floor(col * cellW),
-        sy: Math.floor(row * cellH),
-        sw: Math.round(cellW),
-        sh: Math.round(cellH),
-      });
-    }
-  }
-  return frames;
-}
-
-// Sprite cache — load once, resolve all pending callbacks
-let _sprite = null;
-const _pending = [];
-let _loading = false;
-
-function loadSprite(cb) {
-  if (_sprite)   { cb(_sprite); return; }
-  _pending.push(cb);
-  if (_loading)  return;
-  _loading = true;
-
-  const img = new Image();
-  img.src = SPRITE_PATH;
-  img.onload = () => {
-    const oc = document.createElement('canvas');
-    oc.width = img.naturalWidth; oc.height = img.naturalHeight;
-    const ctx = oc.getContext('2d');
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(img, 0, 0);
-    _sprite = { img, frames: buildFrames(img.naturalWidth, img.naturalHeight, 7, 4) };
-    console.log('[CatSprite] sheet loaded, detected', _sprite.frames.length, 'frames');
-    _pending.forEach(fn => fn(_sprite));
-    _pending.length = 0;
-  };
-  img.onerror = () => console.error('[CatSprite] failed to load', SPRITE_PATH);
-}
-
-// Debug sub-component: draws all detected frames in a 7×4 grid at 80px each
-function DebugGrid({ sprite }) {
-  const refs = useRef([]);
-  useEffect(() => {
-    if (!sprite) return;
-    sprite.frames.forEach((f, i) => {
-      const el = refs.current[i];
-      if (!el) return;
-      const ctx = el.getContext('2d');
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, 80, 80);
-      ctx.drawImage(sprite.img, f.sx, f.sy, f.sw, f.sh, 0, 0, 80, 80);
-    });
-  }, [sprite]);
-
-  return React.createElement('div', {
-    style: { display: 'flex', flexWrap: 'wrap', gap: 2, padding: 8, background: '#e8e8e8', maxWidth: 580 }
-  },
-    (sprite ? sprite.frames : Array(28).fill(null)).map((f, i) =>
-      React.createElement('div', { key: i, style: { textAlign: 'center' } },
-        React.createElement('canvas', {
-          width: 80, height: 80,
-          style: { imageRendering: 'pixelated', display: 'block', border: '1px solid #ccc', background: '#fff' },
-          ref: el => { refs.current[i] = el; }
-        }),
-        React.createElement('div', { style: { fontSize: 9, color: '#555' } }, `#${i}`)
-      )
-    )
-  );
-}
-
-function PetCat({ state = 'idle', size = 160, debug = false }) {
-  const canvasRef   = useRef(null);
+function PetCat({ state = 'idle', size = 160 }) {
+  const imgRef      = useRef(null);
   const timerRef    = useRef(null);
   const frameIdxRef = useRef(0);
-  const [sprite, setSprite] = useState(null);
+  const [loaded, setLoaded] = useState(false);
 
-  // Load sprite sheet once
+  const scale  = Math.min(size / (SHEET_W / NUM_COLS), size / (SHEET_H / NUM_ROWS));
+  const clipW  = Math.floor((SHEET_W / NUM_COLS) * scale);
+  const clipH  = Math.floor((SHEET_H / NUM_ROWS) * scale);
+  const totalW = Math.round(SHEET_W * scale);
+  const totalH = Math.round(SHEET_H * scale);
+
   useEffect(() => {
-    loadSprite(data => setSprite(data));
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
 
-  // Re-animate whenever state or sprite changes
   useEffect(() => {
-    if (!sprite) return;
+    if (!loaded) return;
     if (timerRef.current) clearInterval(timerRef.current);
     const anim = ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
 
     const tick = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext('2d');
-      ctx.imageSmoothingEnabled = false;  // no bilinear blur
-      ctx.clearRect(0, 0, size, size);
-
-      const fi = anim.frames[frameIdxRef.current];
-      const f  = sprite.frames[fi];
-      if (f && f.sw > 0 && f.sh > 0) {
-        // Scale cell to fill canvas while preserving aspect ratio, then center
-        const scale = Math.min(size / f.sw, size / f.sh);
-        const dw = Math.round(f.sw * scale);
-        const dh = Math.round(f.sh * scale);
-        const dx = Math.round((size - dw) / 2);
-        const dy = Math.round((size - dh) / 2);
-        ctx.drawImage(sprite.img, f.sx, f.sy, f.sw, f.sh, dx, dy, dw, dh);
-      }
+      const img = imgRef.current;
+      if (!img) return;
+      const fi  = anim.frames[frameIdxRef.current];
+      const row = Math.floor(fi / NUM_COLS);
+      const col = fi % NUM_COLS;
+      img.style.left = (-Math.round(col * clipW)) + 'px';
+      img.style.top  = (-Math.round(row * clipH)) + 'px';
 
       frameIdxRef.current++;
       if (frameIdxRef.current >= anim.frames.length) {
@@ -195,18 +115,26 @@ function PetCat({ state = 'idle', size = 160, debug = false }) {
     tick();
     timerRef.current = setInterval(tick, 1000 / anim.fps);
     return () => clearInterval(timerRef.current);
-  }, [state, size, sprite]);
+  }, [state, loaded, clipW, clipH]);
 
-  if (debug) {
-    return React.createElement(DebugGrid, { sprite });
-  }
-
-  return React.createElement('canvas', {
-    ref: canvasRef,
-    width:  size,
-    height: size,
-    style: { imageRendering: 'pixelated', display: 'block' }
-  });
+  return React.createElement('div', {
+    style: { width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+  },
+    React.createElement('div', {
+      style: { width: clipW, height: clipH, overflow: 'hidden', position: 'relative', flexShrink: 0 }
+    },
+      React.createElement('img', {
+        ref:    imgRef,
+        src:    SPRITE_PATH,
+        width:  totalW,
+        height: totalH,
+        onLoad: () => setLoaded(true),
+        draggable: false,
+        alt:    '',
+        style:  { position: 'absolute', left: 0, top: 0, imageRendering: 'pixelated', display: 'block' }
+      })
+    )
+  );
 }
 
 function PetHearts({ calPct }) {
