@@ -60,10 +60,10 @@ const DEFAULT_GOALS = { protein: 150, carbs: 200, fat: 65, calories: 2000 };
 const SPRITE_PATH = '/assets/cat-sprite.png';
 
 const ANIMATIONS = {
-  idle:   { frames: [0,1,2,3,4,5],       fps: 1.5, loop: true  },
-  hungry: { frames: [7,8,9,10,11,12],    fps: 2,   loop: true  },
-  evolve: { frames: [14,15,16,17,18,19], fps: 5,   loop: false },
-  happy:  { frames: [14,15,16,17],       fps: 3,   loop: true  },
+  idle:   { frames: [0,1,2,3,4,5],       fps: 1.8, loop: true  },
+  hungry: { frames: [7,8,9,10,11,12],    fps: 2.4, loop: true  },
+  evolve: { frames: [14,15,16,17,18,19], fps: 6,   loop: false },
+  happy:  { frames: [14,15,16,17],       fps: 3.6, loop: true  },
 };
 
 // Per-frame source rects [sx, sy, sw, sh] in the original 1536×1024 sprite sheet.
@@ -153,7 +153,8 @@ function PetCat({ state = 'idle', size = 160 }) {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
-      ctx.imageSmoothingEnabled = false;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.clearRect(0, 0, size, size);
 
       const fi = anim.frames[frameIdxRef.current];
@@ -587,7 +588,7 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
           zIndex: 30,
           pointerEvents: 'none'
         }
-      }, React.createElement(PetCat, { state: petState, size: 180 })),
+      }, React.createElement(PetCat, { state: petState, size: 240 })),
 
       // ── White scrollable card ──
       React.createElement('div', {
