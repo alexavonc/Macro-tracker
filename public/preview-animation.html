@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Animation Preview</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #3cb843; font-family: -apple-system, sans-serif; padding: 16px; }
+h1 { color: white; font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+p  { color: rgba(255,255,255,0.8); font-size: 13px; margin-bottom: 20px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.card {
+  background: rgba(255,255,255,0.15);
+  border-radius: 16px;
+  padding: 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.label { color: white; font-weight: 700; font-size: 13px; text-align: center; }
+.desc  { color: rgba(255,255,255,0.75); font-size: 11px; text-align: center; line-height: 1.4; }
+canvas { display: block; }
+</style>
+</head>
+<body>
+<h1>Animation Smoothness Preview</h1>
+<p>All options using the idle animation. Tap to toggle hungry/idle.</p>
+<div class="grid">
+  <div class="card">
+    <div class="label">Current</div>
+    <canvas id="c0" width="160" height="160"></canvas>
+    <div class="desc">Hard cut back to frame 1 after frame 6</div>
+  </div>
+  <div class="card">
+    <div class="label">1. Ping-pong</div>
+    <canvas id="c1" width="160" height="160"></canvas>
+    <div class="desc">Plays forward then reverses — no hard jump</div>
+  </div>
+  <div class="card">
+    <div class="label">2. Crossfade</div>
+    <canvas id="c2" width="160" height="160"></canvas>
+    <div class="desc">80ms fade between each frame</div>
+  </div>
+  <div class="card">
+    <div class="label">3. Bob + ping-pong</div>
+    <canvas id="c3" width="160" height="160"></canvas>
+    <div class="desc">Ping-pong + subtle 3px breathing bob</div>
+  </div>
+</div>
+
+<script>
+const FRAME_BBOXES = [
+  [  103,   87, 147, 151],[  312,   87, 145, 150],[  502,   87, 147, 151],
+  [  695,   87, 146, 151],[  887,   87, 147, 151],[ 1080,   87, 145, 151],
+  [ 1317,    0, 219, 256],
+  [  104,  292, 153, 140],[  310,  304, 149, 129],[  488,  304, 155, 128],
+  [  678,  296, 147, 137],[  875,  291, 146, 141],[ 1066,  328, 178, 115],
+];
+const FRAME_CENT_X = [
+   66.4,  63.2,  67.6,  67.0,  67.1,  67.1, 109.5,
+   66.9,  66.6,  69.7,  68.2,  68.7,  81.1,
+];
+const MAX=200, SIZE=160;
+const scale=SIZE/MAX;
+
+const IDLE_FRAMES   = [0,1,2,3,4,5];
+const HUNGRY_FRAMES = [7,8,9,10,11,12];
+let useHungry = false;
+
+document.body.addEventListener('click', () => {
+  useHungry = !useHungry;
+});
+
+function drawFrame(ctx, img, fi, dyOffset=0, alpha=1) {
+  const [sx,sy,sw,sh] = FRAME_BBOXES[fi];
+  const dw = Math.round(sw*scale), dh = Math.round(sh*scale);
+  const dx = Math.round(SIZE/2 - FRAME_CENT_X[fi]*scale);
+  const dy = SIZE - dh + dyOffset;
+  ctx.globalAlpha = alpha;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, sx,sy,sw,sh, dx,dy,dw,dh);
+  ctx.globalAlpha = 1;
+}
+
+const img = new Image();
+img.onload = () => {
+  const FPS = 1.8;
+  const INTERVAL = 1000/FPS;
+  const FADE_MS  = 90;
+
+  // --- Canvas 0: current (hard cut loop) ---
+  const ctx0 = document.getElementById('c0').getContext('2d');
+  let fi0 = 0;
+  setInterval(() => {
+    const frames = useHungry ? HUNGRY_FRAMES : IDLE_FRAMES;
+    ctx0.clearRect(0,0,SIZE,SIZE);
+    drawFrame(ctx0, img, frames[fi0 % frames.length]);
+    fi0 = (fi0+1) % frames.length;
+  }, INTERVAL);
+
+  // --- Canvas 1: ping-pong ---
+  const ctx1 = document.getElementById('c1').getContext('2d');
+  let fi1=0, dir1=1;
+  setInterval(() => {
+    const frames = useHungry ? HUNGRY_FRAMES : IDLE_FRAMES;
+    ctx1.clearRect(0,0,SIZE,SIZE);
+    drawFrame(ctx1, img, frames[fi1]);
+    fi1 += dir1;
+    if (fi1 >= frames.length-1) dir1=-1;
+    if (fi1 <= 0)               dir1= 1;
+  }, INTERVAL);
+
+  // --- Canvas 2: crossfade ---
+  const ctx2 = document.getElementById('c2').getContext('2d');
+  let fi2=0, lastTick2=performance.now(), crossPrev=0, crossCur=0, inFade=false, fadeStart=0;
+  function tick2(now) {
+    requestAnimationFrame(tick2);
+    const frames = useHungry ? HUNGRY_FRAMES : IDLE_FRAMES;
+    if (!inFade && now - lastTick2 >= INTERVAL) {
+      crossPrev = frames[fi2];
+      fi2 = (fi2+1) % frames.length;
+      crossCur  = frames[fi2];
+      inFade = true; fadeStart = now;
+      lastTick2 = now;
+    }
+    ctx2.clearRect(0,0,SIZE,SIZE);
+    if (inFade) {
+      const t = Math.min((now - fadeStart) / FADE_MS, 1);
+      drawFrame(ctx2, img, crossPrev, 0, 1-t);
+      drawFrame(ctx2, img, crossCur,  0, t);
+      if (t >= 1) inFade = false;
+    } else {
+      drawFrame(ctx2, img, frames[fi2]);
+    }
+  }
+  requestAnimationFrame(tick2);
+
+  // --- Canvas 3: ping-pong + breathing bob ---
+  const ctx3 = document.getElementById('c3').getContext('2d');
+  let fi3=0, dir3=1;
+  function tick3(now) {
+    requestAnimationFrame(tick3);
+    const frames = useHungry ? HUNGRY_FRAMES : IDLE_FRAMES;
+    // Update frame index on interval
+    if (!tick3._last) tick3._last = now;
+    if (now - tick3._last >= INTERVAL) {
+      fi3 += dir3;
+      if (fi3 >= frames.length-1) dir3=-1;
+      if (fi3 <= 0)               dir3= 1;
+      tick3._last = now;
+    }
+    const bob = Math.round(Math.sin(now / 800) * 3);
+    ctx3.clearRect(0,0,SIZE,SIZE);
+    drawFrame(ctx3, img, frames[fi3], bob);
+  }
+  requestAnimationFrame(tick3);
+};
+img.src = '/assets/cat-sprite.png';
+</script>
+</body>
+</html>
