@@ -60,10 +60,10 @@ const DEFAULT_GOALS = { protein: 150, carbs: 200, fat: 65, calories: 2000 };
 const SPRITE_PATH = '/assets/cat-sprite.png';
 
 const ANIMATIONS = {
-  idle:   { frames: [0,1,2,3,4,5],       fps: 1.8, loop: true  },
-  hungry: { frames: [7,8,9,10,11,12],    fps: 2.4, loop: true  },
-  evolve: { frames: [14,15,16,17,18,19], fps: 6,   loop: false },
-  happy:  { frames: [14,15,16,17],       fps: 3.6, loop: true  },
+  idle:   { frames: [0,1,2,3,4,5],       fps: 1.62, loop: true  },
+  hungry: { frames: [7,8,9,10,11,12],    fps: 2.16, loop: true  },
+  evolve: { frames: [14,15,16,17,18,19], fps: 5.4,  loop: false },
+  happy:  { frames: [14,15,16,17],       fps: 3.24, loop: true  },
 };
 
 // Per-frame source rects [sx, sy, sw, sh] in the original 1536×1024 sprite sheet.
