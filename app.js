@@ -74,7 +74,6 @@ function PetCat({ state = 'idle', size = 160 }) {
   const imgRef      = useRef(null);
   const timerRef    = useRef(null);
   const frameIdxRef = useRef(0);
-  const [loaded, setLoaded] = useState(false);
 
   const scale  = Math.min(size / (SHEET_W / NUM_COLS), size / (SHEET_H / NUM_ROWS));
   const clipW  = Math.floor((SHEET_W / NUM_COLS) * scale);
@@ -83,39 +82,48 @@ function PetCat({ state = 'idle', size = 160 }) {
   const totalH = Math.round(SHEET_H * scale);
 
   useEffect(() => {
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, []);
-
-  useEffect(() => {
-    if (!loaded) return;
     if (timerRef.current) clearInterval(timerRef.current);
     const anim = ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
 
-    const tick = () => {
-      const img = imgRef.current;
-      if (!img) return;
-      const fi  = anim.frames[frameIdxRef.current];
-      const row = Math.floor(fi / NUM_COLS);
-      const col = fi % NUM_COLS;
-      img.style.left = (-Math.round(col * clipW)) + 'px';
-      img.style.top  = (-Math.round(row * clipH)) + 'px';
+    const startAnim = () => {
+      const tick = () => {
+        const img = imgRef.current;
+        if (!img) return;
+        const fi  = anim.frames[frameIdxRef.current];
+        const row = Math.floor(fi / NUM_COLS);
+        const col = fi % NUM_COLS;
+        img.style.left       = (-Math.round(col * clipW)) + 'px';
+        img.style.top        = (-Math.round(row * clipH)) + 'px';
+        img.style.visibility = 'visible';
 
-      frameIdxRef.current++;
-      if (frameIdxRef.current >= anim.frames.length) {
-        if (anim.loop) {
-          frameIdxRef.current = 0;
-        } else {
-          clearInterval(timerRef.current);
-          frameIdxRef.current = anim.frames.length - 1;
+        frameIdxRef.current++;
+        if (frameIdxRef.current >= anim.frames.length) {
+          if (anim.loop) {
+            frameIdxRef.current = 0;
+          } else {
+            clearInterval(timerRef.current);
+            frameIdxRef.current = anim.frames.length - 1;
+          }
         }
-      }
+      };
+      tick();
+      timerRef.current = setInterval(tick, 1000 / anim.fps);
     };
 
-    tick();
-    timerRef.current = setInterval(tick, 1000 / anim.fps);
-    return () => clearInterval(timerRef.current);
-  }, [state, loaded, clipW, clipH]);
+    const img = imgRef.current;
+    if (!img) return;
+    if (img.complete && img.naturalWidth > 0) {
+      startAnim();
+    } else {
+      img.addEventListener('load', startAnim, { once: true });
+    }
+
+    return () => {
+      if (img) img.removeEventListener('load', startAnim);
+      clearInterval(timerRef.current);
+    };
+  }, [state, clipW, clipH]);
 
   return React.createElement('div', {
     style: { width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center' }
@@ -124,14 +132,13 @@ function PetCat({ state = 'idle', size = 160 }) {
       style: { width: clipW, height: clipH, overflow: 'hidden', position: 'relative', flexShrink: 0 }
     },
       React.createElement('img', {
-        ref:    imgRef,
-        src:    SPRITE_PATH,
-        width:  totalW,
-        height: totalH,
-        onLoad: () => setLoaded(true),
+        ref:      imgRef,
+        src:      SPRITE_PATH,
+        width:    totalW,
+        height:   totalH,
         draggable: false,
-        alt:    '',
-        style:  { position: 'absolute', left: 0, top: 0, imageRendering: 'pixelated', display: 'block' }
+        alt:      '',
+        style:    { position: 'absolute', left: 0, top: 0, visibility: 'hidden', imageRendering: 'pixelated', display: 'block' }
       })
     )
   );
