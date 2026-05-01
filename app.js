@@ -119,6 +119,9 @@ function PetCat({ state = 'idle', size = 160 }) {
           top:            -Math.round(frame.row * clipH),
           imageRendering: 'pixelated',
           display:        'block',
+          maxWidth:       'none',
+          width:          totalW,
+          height:         totalH,
         }
       })
     )
