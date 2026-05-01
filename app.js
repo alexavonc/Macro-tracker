@@ -193,12 +193,20 @@ function PetCat({ state = 'idle', size = 160 }) {
 
 function PetHearts({ calPct }) {
   const filled = calPct <= 0 ? 0 : calPct < 0.25 ? 1 : calPct < 0.5 ? 2 : calPct < 0.75 ? 3 : 4;
-  return React.createElement('div', { style: { display: 'flex', gap: 4, marginTop: 6 } },
+  return React.createElement('div', { style: { display: 'flex', gap: 5, marginTop: 8 } },
     [0,1,2,3].map(i =>
-      React.createElement('span', {
+      React.createElement('svg', {
         key: i,
-        style: { fontSize: 18, filter: i < filled ? 'none' : 'grayscale(1) opacity(0.4)' }
-      }, '❤️')
+        width: 20, height: 20,
+        viewBox: '0 0 24 24',
+        style: { display: 'block', opacity: i < filled ? 1 : 0.35 }
+      },
+        React.createElement('path', {
+          d: 'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z',
+          fill: 'white',
+          stroke: 'none'
+        })
+      )
     )
   );
 }
@@ -822,8 +830,7 @@ function App() {
   }
 
   return (
-    React.createElement('div', { className: 'flex justify-center min-h-screen bg-gray-200' },
-      React.createElement('div', { className: 'relative w-full max-w-sm min-h-screen bg-gray-50 flex flex-col overflow-hidden' },
+    React.createElement('div', { className: 'relative w-full min-h-screen bg-gray-50 flex flex-col overflow-hidden' },
 
         // Pages
         React.createElement('div', { className: 'flex-1 overflow-hidden' },
@@ -870,7 +877,6 @@ function App() {
           onClose: () => setShowApiKey(false)
         })
       )
-    )
   );
 }
 
