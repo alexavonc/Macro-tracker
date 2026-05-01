@@ -70,22 +70,11 @@ const ANIMATIONS = {
   happy:  { frames: [14,15,16,17],       fps: 3,   loop: true  },
 };
 
-// Sprite load cache — fires callbacks once the img is in browser cache.
-let _spriteReady = false;
-const _onReady   = [];
-function waitForSprite(cb) {
-  if (_spriteReady) { cb(); return; }
-  _onReady.push(cb);
-  if (_onReady.length > 1) return;
-  const img = new Image();
-  img.onload = () => { _spriteReady = true; _onReady.forEach(fn => fn()); _onReady.length = 0; };
-  img.src = SPRITE_PATH;
-}
-
-const PetCat = React.memo(function PetCat({ state = 'idle', size = 160 }) {
+function PetCat({ state = 'idle', size = 160 }) {
   const timerRef    = useRef(null);
   const frameIdxRef = useRef(0);
-  const [pos, setPos] = useState(null); // null = hidden until first tick
+  const [frame, setFrame]         = useState({ col: 0, row: 0 });
+  const [imgLoaded, setImgLoaded] = useState(false);
 
   const scale  = Math.min(size / (SHEET_W / NUM_COLS), size / (SHEET_H / NUM_ROWS));
   const clipW  = Math.floor((SHEET_W / NUM_COLS) * scale);
@@ -95,16 +84,12 @@ const PetCat = React.memo(function PetCat({ state = 'idle', size = 160 }) {
 
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
-    let cancelled = false;
     const anim = ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
 
-    const tick = () => {
-      if (cancelled) return;
-      const fi  = anim.frames[frameIdxRef.current];
-      const row = Math.floor(fi / NUM_COLS);
-      const col = fi % NUM_COLS;
-      setPos({ left: -Math.round(col * clipW), top: -Math.round(row * clipH) });
+    const advance = () => {
+      const fi = anim.frames[frameIdxRef.current];
+      setFrame({ col: fi % NUM_COLS, row: Math.floor(fi / NUM_COLS) });
       frameIdxRef.current++;
       if (frameIdxRef.current >= anim.frames.length) {
         if (anim.loop) frameIdxRef.current = 0;
@@ -112,14 +97,10 @@ const PetCat = React.memo(function PetCat({ state = 'idle', size = 160 }) {
       }
     };
 
-    waitForSprite(() => {
-      if (cancelled) return;
-      tick();
-      timerRef.current = setInterval(tick, 1000 / anim.fps);
-    });
-
-    return () => { cancelled = true; clearInterval(timerRef.current); };
-  }, [state, clipW, clipH]);
+    advance();
+    timerRef.current = setInterval(advance, 1000 / anim.fps);
+    return () => clearInterval(timerRef.current);
+  }, [state]);
 
   return React.createElement('div', {
     style: { width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center' }
@@ -127,23 +108,25 @@ const PetCat = React.memo(function PetCat({ state = 'idle', size = 160 }) {
     React.createElement('div', {
       style: { width: clipW, height: clipH, overflow: 'hidden', position: 'relative', flexShrink: 0 }
     },
-      pos && React.createElement('img', {
+      React.createElement('img', {
         src:      SPRITE_PATH,
         width:    totalW,
         height:   totalH,
+        onLoad:   () => setImgLoaded(true),
+        onError:  () => console.error('[PetCat] sprite failed to load:', SPRITE_PATH),
         draggable: false,
         alt:      '',
         style:    {
           position:       'absolute',
-          left:           pos.left,
-          top:            pos.top,
+          left:           -Math.round(frame.col * clipW),
+          top:            -Math.round(frame.row * clipH),
           imageRendering: 'pixelated',
-          display:        'block',
+          display:        imgLoaded ? 'block' : 'none',
         }
       })
     )
   );
-});
+}
 
 function PetHearts({ calPct }) {
   const filled = calPct <= 0 ? 0 : calPct < 0.25 ? 1 : calPct < 0.5 ? 2 : calPct < 0.75 ? 3 : 4;
