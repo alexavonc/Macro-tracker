@@ -776,7 +776,7 @@ function App() {
   }
 
   return (
-    React.createElement('div', { className: 'relative w-full min-h-screen bg-gray-50 flex flex-col overflow-hidden' },
+    React.createElement('div', { className: 'relative w-full h-screen bg-gray-50 flex flex-col overflow-hidden' },
 
         // Pages
         React.createElement('div', { className: 'flex-1 overflow-hidden' },
