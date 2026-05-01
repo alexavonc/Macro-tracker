@@ -71,10 +71,9 @@ const ANIMATIONS = {
 };
 
 function PetCat({ state = 'idle', size = 160 }) {
+  const imgRef      = useRef(null);
   const timerRef    = useRef(null);
   const frameIdxRef = useRef(0);
-  const [frame, setFrame]         = useState({ col: 0, row: 0 });
-  const [imgLoaded, setImgLoaded] = useState(false);
 
   const scale  = Math.min(size / (SHEET_W / NUM_COLS), size / (SHEET_H / NUM_ROWS));
   const clipW  = Math.floor((SHEET_W / NUM_COLS) * scale);
@@ -87,9 +86,14 @@ function PetCat({ state = 'idle', size = 160 }) {
     const anim = ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
 
-    const advance = () => {
-      const fi = anim.frames[frameIdxRef.current];
-      setFrame({ col: fi % NUM_COLS, row: Math.floor(fi / NUM_COLS) });
+    const tick = () => {
+      const img = imgRef.current;
+      if (!img) return;
+      const fi  = anim.frames[frameIdxRef.current];
+      const col = fi % NUM_COLS;
+      const row = Math.floor(fi / NUM_COLS);
+      img.style.left = (-Math.round(col * clipW)) + 'px';
+      img.style.top  = (-Math.round(row * clipH)) + 'px';
       frameIdxRef.current++;
       if (frameIdxRef.current >= anim.frames.length) {
         if (anim.loop) frameIdxRef.current = 0;
@@ -97,10 +101,10 @@ function PetCat({ state = 'idle', size = 160 }) {
       }
     };
 
-    advance();
-    timerRef.current = setInterval(advance, 1000 / anim.fps);
+    tick();
+    timerRef.current = setInterval(tick, 1000 / anim.fps);
     return () => clearInterval(timerRef.current);
-  }, [state]);
+  }, [state, clipW, clipH]);
 
   return React.createElement('div', {
     style: { width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center' }
@@ -109,19 +113,18 @@ function PetCat({ state = 'idle', size = 160 }) {
       style: { width: clipW, height: clipH, overflow: 'hidden', position: 'relative', flexShrink: 0 }
     },
       React.createElement('img', {
-        src:      SPRITE_PATH,
-        width:    totalW,
-        height:   totalH,
-        onLoad:   () => setImgLoaded(true),
-        onError:  () => console.error('[PetCat] sprite failed to load:', SPRITE_PATH),
+        ref:       imgRef,
+        src:       SPRITE_PATH,
+        width:     totalW,
+        height:    totalH,
         draggable: false,
-        alt:      '',
-        style:    {
+        alt:       '',
+        style:     {
           position:       'absolute',
-          left:           -Math.round(frame.col * clipW),
-          top:            -Math.round(frame.row * clipH),
+          left:           0,
+          top:            0,
           imageRendering: 'pixelated',
-          display:        imgLoaded ? 'block' : 'none',
+          display:        'block',
         }
       })
     )
