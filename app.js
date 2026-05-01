@@ -66,51 +66,52 @@ const ANIMATIONS = {
   happy:  { frames: [14,15,16,17],       fps: 3,   loop: true  },
 };
 
-// Tight content bboxes [sx, sy, sw, sh] per frame in the original 1536×1024 sprite sheet.
-// Derived from pixel-alpha analysis so each draw crops exactly to cat content,
-// eliminating bleed from adjacent cells and row boundaries.
+// Per-frame source rects [sx, sy, sw, sh] in the original 1536×1024 sprite sheet.
+// Derived by connected-component analysis: largest alpha blob per cell = main cat body only,
+// excluding ghost cats from adjacent cells that physically overlap in the sprite.
 const FRAME_BBOXES = [
-  [  12,   2, 207, 254],  //  0 idle c0
-  [ 219,  35, 219, 205],  //  1 idle c1
-  [ 438,   0, 219, 254],  //  2 idle c2
-  [ 658,  18, 191, 236],  //  3 idle c3
-  [ 879,   2, 218, 252],  //  4 idle c4
-  [1097,   4, 219, 246],  //  5 idle c5
-  [1316,  59, 132, 181],  //  6 (unused)
-  [  12, 263, 207, 249],  //  7 hungry c0
-  [ 219, 304, 219, 208],  //  8 hungry c1
-  [ 438, 262, 205, 250],  //  9 hungry c2
-  [ 659, 262, 218, 250],  // 10 hungry c3
-  [ 877, 257, 220, 255],  // 11 hungry c4
-  [1097, 257, 219, 255],  // 12 hungry c5
-  [1316, 296, 189, 216],  // 13 (unused)
-  [  12, 512, 207, 256],  // 14 evolve c0
-  [ 219, 512, 219, 167],  // 15 evolve c1
-  [ 438, 512, 219, 256],  // 16 evolve c2
-  [ 672, 512, 205, 239],  // 17 evolve c3
-  [ 877, 512, 220, 256],  // 18 evolve c4
-  [1097, 512, 219, 247],  // 19 evolve c5
-  [1316, 512, 133, 128],  // 20 (unused)
-  [  12, 773, 207, 251],  // 21 dead c0
-  [ 219, 800, 219, 136],  // 22 dead c1
-  [ 438, 768, 219, 255],  // 23 dead c2
-  [ 658, 773, 219, 242],  // 24 dead c3
-  [ 877, 769, 220, 255],  // 25 dead c4
-  [1097, 769, 219, 254],  // 26 dead c5
-  [1316, 800, 196, 207],  // 27 dead c6
+  [  103,   87, 116, 151],  //  0 idle c0
+  [  312,   87, 127, 150],  //  1 idle c1
+  [  502,   87, 147, 151],  //  2 idle c2
+  [  695,   87, 146, 151],  //  3 idle c3
+  [  887,   87, 147, 151],  //  4 idle c4
+  [ 1097,   88, 128, 150],  //  5 idle c5
+  [ 1317,    0, 219, 256],  //  6 (unused)
+  [  104,  292, 115, 140],  //  7 hungry c0
+  [  310,  304, 129, 129],  //  8 hungry c1
+  [  488,  304, 155, 128],  //  9 hungry c2
+  [  678,  296, 147, 137],  // 10 hungry c3
+  [  878,  291, 143, 141],  // 11 hungry c4
+  [ 1097,  328, 147, 115],  // 12 hungry c5
+  [ 1317,  256, 219, 256],  // 13 (unused)
+  [  105,  512, 114, 124],  // 14 evolve c0
+  [  312,  512, 127, 124],  // 15 evolve c1
+  [  502,  512, 131, 124],  // 16 evolve c2
+  [  693,  512, 122, 124],  // 17 evolve c3
+  [  888,  512, 132, 124],  // 18 evolve c4
+  [ 1097,  512, 139, 128],  // 19 evolve c5
+  [ 1317,  512, 219, 256],  // 20 (unused)
+  [    0,  768, 219, 256],  // 21 (unused)
+  [  219,  768, 220, 256],  // 22 (unused)
+  [  439,  768, 219, 256],  // 23 (unused)
+  [  658,  768, 220, 256],  // 24 (unused)
+  [  878,  768, 219, 256],  // 25 (unused)
+  [ 1097,  768, 220, 256],  // 26 (unused)
+  [ 1317,  768, 219, 256],  // 27 (unused)
 ];
 
-// Fixed scale from the largest content dims across all frames — keeps cat the same size in every state
-const MAX_FRAME_W = 220;
-const MAX_FRAME_H = 256;
+// Scale based on max main-cat dimensions across all used frames.
+// 175 gives scale ≈ 1.03 at size=180, keeping cats large while fitting in canvas.
+const MAX_FRAME_W = 175;
+const MAX_FRAME_H = 175;
 
-// Alpha-weighted centroid x within each tight bbox (centroid_x_in_sheet - bbox_sx).
-// Used to pin the visual center of mass to canvas center, eliminating horizontal drift.
+// Alpha-weighted centroid x within each main-cat bbox — pins cat body to canvas center
+// across all frames, eliminating horizontal drift during animation.
 const FRAME_CENT_X = [
-  150.9, 136.1, 125.3, 109.1,  87.1,  90.6,  66.0,  // 0-6  idle row
-  150.0, 136.6, 112.7,  86.9,  84.6,  99.0,  94.5,  // 7-13 hungry row
-  152.8, 136.6, 112.5,  77.6,  89.3,  91.0,  66.5,  // 14-20 evolve row
-  103.5, 109.5, 109.5, 109.5, 110.0, 109.5,  98.0,  // 21-27 dead row (unused)
+   58.1,  59.0,  67.6,  67.0,  67.1,  55.5, 109.5,  // 0-6  idle row
+   59.6,  62.4,  69.7,  68.2,  66.1,  61.3, 109.5,  // 7-13 hungry row
+   59.6,  65.4,  59.7,  55.2,  64.6,  58.6, 109.5,  // 14-20 evolve row
+  109.5, 110.0, 109.5, 110.0, 109.5, 110.0, 109.5,  // 21-27 dead row (unused)
 ];
 
 // Global sprite cache — load once, resolve all pending callbacks
