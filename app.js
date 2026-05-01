@@ -58,10 +58,6 @@ const DEFAULT_GOALS = { protein: 150, carbs: 200, fat: 65, calories: 2000 };
 // Row 4 (frames 21-27): dead (unused in this app — mapped to happy)
 
 const SPRITE_PATH = '/assets/cat-sprite.png';
-const SHEET_W  = 1536;
-const SHEET_H  = 1024;
-const NUM_COLS = 7;
-const NUM_ROWS = 4;
 
 const ANIMATIONS = {
   idle:   { frames: [0,1,2,3,4,5],       fps: 1.62, loop: true  },
@@ -70,37 +66,103 @@ const ANIMATIONS = {
   happy:  { frames: [14,15,16,17],       fps: 3.24, loop: true  },
 };
 
+// Per-frame source rects [sx, sy, sw, sh] in the original 1536×1024 sprite sheet.
+// Derived by cross-cell connected-component analysis: floods across ±1 cell boundary
+// to capture cats whose bodies physically cross cell edges (e.g. the sleeping cat).
+const FRAME_BBOXES = [
+  [  103,   87, 147, 151],  //  0 idle c0
+  [  312,   87, 145, 150],  //  1 idle c1
+  [  502,   87, 147, 151],  //  2 idle c2
+  [  695,   87, 146, 151],  //  3 idle c3
+  [  887,   87, 147, 151],  //  4 idle c4
+  [ 1080,   87, 145, 151],  //  5 idle c5
+  [ 1317,    0, 219, 256],  //  6 (unused)
+  [  104,  292, 153, 140],  //  7 hungry c0
+  [  310,  304, 149, 129],  //  8 hungry c1
+  [  488,  304, 155, 128],  //  9 hungry c2
+  [  678,  296, 147, 137],  // 10 hungry c3
+  [  875,  291, 146, 141],  // 11 hungry c4
+  [ 1066,  328, 178, 115],  // 12 hungry c5 — sleeping cat crosses cell boundary
+  [ 1317,  256, 219, 256],  // 13 (unused)
+  [  105,  512, 152, 124],  // 14 evolve c0
+  [  312,  512, 149, 124],  // 15 evolve c1
+  [  502,  512, 131, 124],  // 16 evolve c2
+  [  693,  512, 122, 124],  // 17 evolve c3
+  [  888,  512, 132, 124],  // 18 evolve c4
+  [ 1064,  512, 172, 128],  // 19 evolve c5 — crosses cell boundary
+  [ 1317,  512, 219, 256],  // 20 (unused)
+  [    0,  768, 219, 256],  // 21 (unused)
+  [  219,  768, 220, 256],  // 22 (unused)
+  [  439,  768, 219, 256],  // 23 (unused)
+  [  658,  768, 220, 256],  // 24 (unused)
+  [  878,  768, 219, 256],  // 25 (unused)
+  [ 1097,  768, 220, 256],  // 26 (unused)
+  [ 1317,  768, 219, 256],  // 27 (unused)
+];
+
+// MAX=200 accommodates the widest cross-boundary frame (f12: sw=178) at size=240
+const MAX_FRAME_W = 200;
+const MAX_FRAME_H = 200;
+
+// Alpha-weighted centroid x within each bbox (recomputed after cross-cell expansion).
+const FRAME_CENT_X = [
+   66.4,  63.2,  67.6,  67.0,  67.1,  67.1, 109.5,  // 0-6  idle row
+   66.9,  66.6,  69.7,  68.2,  68.7,  81.1, 109.5,  // 7-13 hungry row
+   70.2,  71.5,  59.7,  55.2,  64.6,  81.8, 109.5,  // 14-20 evolve row
+  109.5, 109.5, 109.5, 109.5, 109.5, 109.5, 109.5,  // 21-27 dead row (unused)
+];
+
+// Global sprite cache — load once, resolve all pending callbacks
+let _sprite  = null;
+const _queue = [];
+let _loading = false;
+
+function loadSprite(cb) {
+  if (_sprite)  { cb(_sprite); return; }
+  _queue.push(cb);
+  if (_loading) return;
+  _loading = true;
+  const img = new Image();
+  img.src = SPRITE_PATH;
+  img.onload  = () => { _sprite = img; _queue.forEach(fn => fn(img)); _queue.length = 0; };
+  img.onerror = () => console.error('[PetCat] sprite failed:', SPRITE_PATH);
+}
+
 function PetCat({ state = 'idle', size = 160 }) {
-  const imgRef      = useRef(null);
+  const canvasRef   = useRef(null);
   const timerRef    = useRef(null);
   const frameIdxRef = useRef(0);
-  const [loaded, setLoaded] = useState(false);
+  const [sprite, setSprite] = useState(null);
 
-  const scale  = Math.min(size / (SHEET_W / NUM_COLS), size / (SHEET_H / NUM_ROWS));
-  const clipW  = Math.floor((SHEET_W / NUM_COLS) * scale);
-  const clipH  = Math.floor((SHEET_H / NUM_ROWS) * scale);
-  const totalW = Math.round(SHEET_W * scale);
-  const totalH = Math.round(SHEET_H * scale);
+  const scale = Math.min(size / MAX_FRAME_W, size / MAX_FRAME_H);
 
   useEffect(() => {
+    loadSprite(img => setSprite(img));
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
 
   useEffect(() => {
-    if (!loaded) return;
+    if (!sprite) return;
     if (timerRef.current) clearInterval(timerRef.current);
     const anim = ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
     let dir = 1;
 
     const tick = () => {
-      const img = imgRef.current;
-      if (!img) return;
-      const fi  = anim.frames[frameIdxRef.current];
-      const row = Math.floor(fi / NUM_COLS);
-      const col = fi % NUM_COLS;
-      img.style.left = (-Math.round(col * clipW)) + 'px';
-      img.style.top  = (-Math.round(row * clipH)) + 'px';
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.clearRect(0, 0, size, size);
+
+      const fi = anim.frames[frameIdxRef.current];
+      const [sx, sy, sw, sh] = FRAME_BBOXES[fi];
+      const dw = Math.round(sw * scale);
+      const dh = Math.round(sh * scale);
+      const dx = Math.round(size / 2 - FRAME_CENT_X[fi] * scale);
+      const dy = size - dh;
+      ctx.drawImage(sprite, sx, sy, sw, sh, dx, dy, dw, dh);
 
       if (anim.loop) {
         frameIdxRef.current += dir;
@@ -118,26 +180,14 @@ function PetCat({ state = 'idle', size = 160 }) {
     tick();
     timerRef.current = setInterval(tick, 1000 / anim.fps);
     return () => clearInterval(timerRef.current);
-  }, [state, loaded, clipW, clipH]);
+  }, [state, sprite, size, scale]);
 
-  return React.createElement('div', {
-    style: { width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center' }
-  },
-    React.createElement('div', {
-      style: { width: clipW, height: clipH, overflow: 'hidden', position: 'relative', flexShrink: 0 }
-    },
-      React.createElement('img', {
-        ref:    imgRef,
-        src:    SPRITE_PATH,
-        width:  totalW,
-        height: totalH,
-        onLoad: () => setLoaded(true),
-        draggable: false,
-        alt: '',
-        style: { position: 'absolute', left: 0, top: 0, imageRendering: 'auto', display: 'block' }
-      })
-    )
-  );
+  return React.createElement('canvas', {
+    ref:   canvasRef,
+    width: size,
+    height: size,
+    style: { imageRendering: 'pixelated', display: 'block' }
+  });
 }
 
 function PetHearts({ calPct }) {
