@@ -71,9 +71,9 @@ const ANIMATIONS = {
 };
 
 function PetCat({ state = 'idle', size = 160 }) {
-  const imgRef      = useRef(null);
   const timerRef    = useRef(null);
   const frameIdxRef = useRef(0);
+  const [frame, setFrame] = useState({ col: 0, row: 0 });
 
   const scale  = Math.min(size / (SHEET_W / NUM_COLS), size / (SHEET_H / NUM_ROWS));
   const clipW  = Math.floor((SHEET_W / NUM_COLS) * scale);
@@ -86,14 +86,9 @@ function PetCat({ state = 'idle', size = 160 }) {
     const anim = ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
 
-    const tick = () => {
-      const img = imgRef.current;
-      if (!img) return;
-      const fi  = anim.frames[frameIdxRef.current];
-      const col = fi % NUM_COLS;
-      const row = Math.floor(fi / NUM_COLS);
-      img.style.left = (-Math.round(col * clipW)) + 'px';
-      img.style.top  = (-Math.round(row * clipH)) + 'px';
+    const advance = () => {
+      const fi = anim.frames[frameIdxRef.current];
+      setFrame({ col: fi % NUM_COLS, row: Math.floor(fi / NUM_COLS) });
       frameIdxRef.current++;
       if (frameIdxRef.current >= anim.frames.length) {
         if (anim.loop) frameIdxRef.current = 0;
@@ -101,10 +96,10 @@ function PetCat({ state = 'idle', size = 160 }) {
       }
     };
 
-    tick();
-    timerRef.current = setInterval(tick, 1000 / anim.fps);
+    advance();
+    timerRef.current = setInterval(advance, 1000 / anim.fps);
     return () => clearInterval(timerRef.current);
-  }, [state, clipW, clipH]);
+  }, [state]);
 
   return React.createElement('div', {
     style: { width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center' }
@@ -113,7 +108,6 @@ function PetCat({ state = 'idle', size = 160 }) {
       style: { width: clipW, height: clipH, overflow: 'hidden', position: 'relative', flexShrink: 0 }
     },
       React.createElement('img', {
-        ref:       imgRef,
         src:       SPRITE_PATH,
         width:     totalW,
         height:    totalH,
@@ -121,8 +115,8 @@ function PetCat({ state = 'idle', size = 160 }) {
         alt:       '',
         style:     {
           position:       'absolute',
-          left:           0,
-          top:            0,
+          left:           -Math.round(frame.col * clipW),
+          top:            -Math.round(frame.row * clipH),
           imageRendering: 'pixelated',
           display:        'block',
         }
