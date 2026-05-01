@@ -58,10 +58,6 @@ const DEFAULT_GOALS = { protein: 150, carbs: 200, fat: 65, calories: 2000 };
 // Row 4 (frames 21-27): dead (unused in this app — mapped to happy)
 
 const SPRITE_PATH = '/assets/cat-sprite.png';
-const SHEET_W  = 1536;
-const SHEET_H  = 1024;
-const NUM_COLS = 7;
-const NUM_ROWS = 4;
 
 const ANIMATIONS = {
   idle:   { frames: [0,1,2,3,4,5],       fps: 1.5, loop: true  },
@@ -70,62 +66,116 @@ const ANIMATIONS = {
   happy:  { frames: [14,15,16,17],       fps: 3,   loop: true  },
 };
 
+// Tight content bboxes [sx, sy, sw, sh] per frame in the original 1536×1024 sprite sheet.
+// Derived from pixel-alpha analysis so each draw crops exactly to cat content,
+// eliminating bleed from adjacent cells and row boundaries.
+const FRAME_BBOXES = [
+  [  12,   2, 207, 254],  //  0 idle c0
+  [ 219,  35, 219, 205],  //  1 idle c1
+  [ 438,   0, 219, 254],  //  2 idle c2
+  [ 658,  18, 191, 236],  //  3 idle c3
+  [ 879,   2, 218, 252],  //  4 idle c4
+  [1097,   4, 219, 246],  //  5 idle c5
+  [1316,  59, 132, 181],  //  6 (unused)
+  [  12, 263, 207, 249],  //  7 hungry c0
+  [ 219, 304, 219, 208],  //  8 hungry c1
+  [ 438, 262, 205, 250],  //  9 hungry c2
+  [ 659, 262, 218, 250],  // 10 hungry c3
+  [ 877, 257, 220, 255],  // 11 hungry c4
+  [1097, 257, 219, 255],  // 12 hungry c5
+  [1316, 296, 189, 216],  // 13 (unused)
+  [  12, 512, 207, 256],  // 14 evolve c0
+  [ 219, 512, 219, 167],  // 15 evolve c1
+  [ 438, 512, 219, 256],  // 16 evolve c2
+  [ 672, 512, 205, 239],  // 17 evolve c3
+  [ 877, 512, 220, 256],  // 18 evolve c4
+  [1097, 512, 219, 247],  // 19 evolve c5
+  [1316, 512, 133, 128],  // 20 (unused)
+  [  12, 773, 207, 251],  // 21 dead c0
+  [ 219, 800, 219, 136],  // 22 dead c1
+  [ 438, 768, 219, 255],  // 23 dead c2
+  [ 658, 773, 219, 242],  // 24 dead c3
+  [ 877, 769, 220, 255],  // 25 dead c4
+  [1097, 769, 219, 254],  // 26 dead c5
+  [1316, 800, 196, 207],  // 27 dead c6
+];
+
+// Fixed scale from the largest content dims across all frames — keeps cat the same size in every state
+const MAX_FRAME_W = 220;
+const MAX_FRAME_H = 256;
+
+// Global sprite cache — load once, resolve all pending callbacks
+let _sprite  = null;
+const _queue = [];
+let _loading = false;
+
+function loadSprite(cb) {
+  if (_sprite)  { cb(_sprite); return; }
+  _queue.push(cb);
+  if (_loading) return;
+  _loading = true;
+  const img = new Image();
+  img.src = SPRITE_PATH;
+  img.onload  = () => { _sprite = img; _queue.forEach(fn => fn(img)); _queue.length = 0; };
+  img.onerror = () => console.error('[PetCat] sprite failed:', SPRITE_PATH);
+}
+
 function PetCat({ state = 'idle', size = 160 }) {
+  const canvasRef   = useRef(null);
   const timerRef    = useRef(null);
   const frameIdxRef = useRef(0);
-  const [frame, setFrame] = useState({ col: 0, row: 0 });
+  const [sprite, setSprite] = useState(null);
 
-  const scale  = Math.min(size / (SHEET_W / NUM_COLS), size / (SHEET_H / NUM_ROWS));
-  const clipW  = Math.floor((SHEET_W / NUM_COLS) * scale);
-  const clipH  = Math.floor((SHEET_H / NUM_ROWS) * scale);
-  const totalW = Math.round(SHEET_W * scale);
-  const totalH = Math.round(SHEET_H * scale);
+  const scale = Math.min(size / MAX_FRAME_W, size / MAX_FRAME_H);
 
   useEffect(() => {
+    loadSprite(img => setSprite(img));
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, []);
+
+  useEffect(() => {
+    if (!sprite) return;
     if (timerRef.current) clearInterval(timerRef.current);
     const anim = ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
 
-    const advance = () => {
+    const tick = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, size, size);
+
       const fi = anim.frames[frameIdxRef.current];
-      setFrame({ col: fi % NUM_COLS, row: Math.floor(fi / NUM_COLS) });
+      const [sx, sy, sw, sh] = FRAME_BBOXES[fi];
+      const dw = Math.round(sw * scale);
+      const dh = Math.round(sh * scale);
+      const dx = Math.round((size - dw) / 2);  // center horizontally
+      const dy = size - dh;                     // bottom-align: paws stay on the ground
+      ctx.drawImage(sprite, sx, sy, sw, sh, dx, dy, dw, dh);
+
       frameIdxRef.current++;
       if (frameIdxRef.current >= anim.frames.length) {
-        if (anim.loop) frameIdxRef.current = 0;
-        else clearInterval(timerRef.current);
+        if (anim.loop) {
+          frameIdxRef.current = 0;
+        } else {
+          clearInterval(timerRef.current);
+          frameIdxRef.current = anim.frames.length - 1;
+        }
       }
     };
 
-    advance();
-    timerRef.current = setInterval(advance, 1000 / anim.fps);
+    tick();
+    timerRef.current = setInterval(tick, 1000 / anim.fps);
     return () => clearInterval(timerRef.current);
-  }, [state]);
+  }, [state, sprite, size, scale]);
 
-  return React.createElement('div', {
-    style: { width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center' }
-  },
-    React.createElement('div', {
-      style: { width: clipW, height: clipH, overflow: 'hidden', position: 'relative', flexShrink: 0 }
-    },
-      React.createElement('img', {
-        src:       SPRITE_PATH,
-        width:     totalW,
-        height:    totalH,
-        draggable: false,
-        alt:       '',
-        style:     {
-          position:       'absolute',
-          left:           -Math.round(frame.col * clipW),
-          top:            -Math.round(frame.row * clipH),
-          imageRendering: 'pixelated',
-          display:        'block',
-          maxWidth:       'none',
-          width:          totalW,
-          height:         totalH,
-        }
-      })
-    )
-  );
+  return React.createElement('canvas', {
+    ref:   canvasRef,
+    width: size,
+    height: size,
+    style: { imageRendering: 'pixelated', display: 'block' }
+  });
 }
 
 function PetHearts({ calPct }) {
