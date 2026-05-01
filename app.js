@@ -70,10 +70,22 @@ const ANIMATIONS = {
   happy:  { frames: [14,15,16,17],       fps: 3,   loop: true  },
 };
 
-function PetCat({ state = 'idle', size = 160 }) {
-  const imgRef      = useRef(null);
+// Sprite load cache — fires callbacks once the img is in browser cache.
+let _spriteReady = false;
+const _onReady   = [];
+function waitForSprite(cb) {
+  if (_spriteReady) { cb(); return; }
+  _onReady.push(cb);
+  if (_onReady.length > 1) return;
+  const img = new Image();
+  img.onload = () => { _spriteReady = true; _onReady.forEach(fn => fn()); _onReady.length = 0; };
+  img.src = SPRITE_PATH;
+}
+
+const PetCat = React.memo(function PetCat({ state = 'idle', size = 160 }) {
   const timerRef    = useRef(null);
   const frameIdxRef = useRef(0);
+  const [pos, setPos] = useState(null); // null = hidden until first tick
 
   const scale  = Math.min(size / (SHEET_W / NUM_COLS), size / (SHEET_H / NUM_ROWS));
   const clipW  = Math.floor((SHEET_W / NUM_COLS) * scale);
@@ -83,46 +95,30 @@ function PetCat({ state = 'idle', size = 160 }) {
 
   useEffect(() => {
     if (timerRef.current) clearInterval(timerRef.current);
+    let cancelled = false;
     const anim = ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
 
-    const startAnim = () => {
-      const tick = () => {
-        const img = imgRef.current;
-        if (!img) return;
-        const fi  = anim.frames[frameIdxRef.current];
-        const row = Math.floor(fi / NUM_COLS);
-        const col = fi % NUM_COLS;
-        img.style.left       = (-Math.round(col * clipW)) + 'px';
-        img.style.top        = (-Math.round(row * clipH)) + 'px';
-        img.style.visibility = 'visible';
+    const tick = () => {
+      if (cancelled) return;
+      const fi  = anim.frames[frameIdxRef.current];
+      const row = Math.floor(fi / NUM_COLS);
+      const col = fi % NUM_COLS;
+      setPos({ left: -Math.round(col * clipW), top: -Math.round(row * clipH) });
+      frameIdxRef.current++;
+      if (frameIdxRef.current >= anim.frames.length) {
+        if (anim.loop) frameIdxRef.current = 0;
+        else clearInterval(timerRef.current);
+      }
+    };
 
-        frameIdxRef.current++;
-        if (frameIdxRef.current >= anim.frames.length) {
-          if (anim.loop) {
-            frameIdxRef.current = 0;
-          } else {
-            clearInterval(timerRef.current);
-            frameIdxRef.current = anim.frames.length - 1;
-          }
-        }
-      };
+    waitForSprite(() => {
+      if (cancelled) return;
       tick();
       timerRef.current = setInterval(tick, 1000 / anim.fps);
-    };
+    });
 
-    const img = imgRef.current;
-    if (!img) return;
-    if (img.complete && img.naturalWidth > 0) {
-      startAnim();
-    } else {
-      img.addEventListener('load', startAnim, { once: true });
-    }
-
-    return () => {
-      if (img) img.removeEventListener('load', startAnim);
-      clearInterval(timerRef.current);
-    };
+    return () => { cancelled = true; clearInterval(timerRef.current); };
   }, [state, clipW, clipH]);
 
   return React.createElement('div', {
@@ -131,18 +127,23 @@ function PetCat({ state = 'idle', size = 160 }) {
     React.createElement('div', {
       style: { width: clipW, height: clipH, overflow: 'hidden', position: 'relative', flexShrink: 0 }
     },
-      React.createElement('img', {
-        ref:      imgRef,
+      pos && React.createElement('img', {
         src:      SPRITE_PATH,
         width:    totalW,
         height:   totalH,
         draggable: false,
         alt:      '',
-        style:    { position: 'absolute', left: 0, top: 0, visibility: 'hidden', imageRendering: 'pixelated', display: 'block' }
+        style:    {
+          position:       'absolute',
+          left:           pos.left,
+          top:            pos.top,
+          imageRendering: 'pixelated',
+          display:        'block',
+        }
       })
     )
   );
-}
+});
 
 function PetHearts({ calPct }) {
   const filled = calPct <= 0 ? 0 : calPct < 0.25 ? 1 : calPct < 0.5 ? 2 : calPct < 0.75 ? 3 : 4;
