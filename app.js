@@ -147,6 +147,7 @@ function PetCat({ state = 'idle', size = 160 }) {
     if (timerRef.current) clearInterval(timerRef.current);
     const anim = ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
+    let dir = 1;
 
     const tick = () => {
       const canvas = canvasRef.current;
@@ -164,11 +165,13 @@ function PetCat({ state = 'idle', size = 160 }) {
       const dy = size - dh;
       ctx.drawImage(sprite, sx, sy, sw, sh, dx, dy, dw, dh);
 
-      frameIdxRef.current++;
-      if (frameIdxRef.current >= anim.frames.length) {
-        if (anim.loop) {
-          frameIdxRef.current = 0;
-        } else {
+      if (anim.loop) {
+        frameIdxRef.current += dir;
+        if (frameIdxRef.current >= anim.frames.length - 1) dir = -1;
+        if (frameIdxRef.current <= 0)                      dir =  1;
+      } else {
+        frameIdxRef.current++;
+        if (frameIdxRef.current >= anim.frames.length) {
           clearInterval(timerRef.current);
           frameIdxRef.current = anim.frames.length - 1;
         }
