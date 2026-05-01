@@ -104,6 +104,15 @@ const FRAME_BBOXES = [
 const MAX_FRAME_W = 220;
 const MAX_FRAME_H = 256;
 
+// Alpha-weighted centroid x within each tight bbox (centroid_x_in_sheet - bbox_sx).
+// Used to pin the visual center of mass to canvas center, eliminating horizontal drift.
+const FRAME_CENT_X = [
+  150.9, 136.1, 125.3, 109.1,  87.1,  90.6,  66.0,  // 0-6  idle row
+  150.0, 136.6, 112.7,  86.9,  84.6,  99.0,  94.5,  // 7-13 hungry row
+  152.8, 136.6, 112.5,  77.6,  89.3,  91.0,  66.5,  // 14-20 evolve row
+  103.5, 109.5, 109.5, 109.5, 110.0, 109.5,  98.0,  // 21-27 dead row (unused)
+];
+
 // Global sprite cache — load once, resolve all pending callbacks
 let _sprite  = null;
 const _queue = [];
@@ -150,8 +159,8 @@ function PetCat({ state = 'idle', size = 160 }) {
       const [sx, sy, sw, sh] = FRAME_BBOXES[fi];
       const dw = Math.round(sw * scale);
       const dh = Math.round(sh * scale);
-      const dx = Math.round((size - dw) / 2);  // center horizontally
-      const dy = size - dh;                     // bottom-align: paws stay on the ground
+      const dx = Math.round(size / 2 - FRAME_CENT_X[fi] * scale);
+      const dy = size - dh;
       ctx.drawImage(sprite, sx, sy, sw, sh, dx, dy, dw, dh);
 
       frameIdxRef.current++;
