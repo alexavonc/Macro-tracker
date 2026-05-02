@@ -673,10 +673,12 @@ function LoginSheet({ onDismiss }) {
     setLoading(true); setError('');
     try {
       const provider = new firebase.auth.GoogleAuthProvider();
-      await firebase.auth().signInWithPopup(provider);
+      await firebase.auth().signInWithRedirect(provider);
+      // page will navigate away — no finally cleanup needed
     } catch(e) {
-      if (e.code !== 'auth/popup-closed-by-user') setError('Sign-in failed. Please try again.');
-    } finally { setLoading(false); }
+      setError('Sign-in failed. Please try again.');
+      setLoading(false);
+    }
   }
 
   return React.createElement('div', { style: { position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end' } },
@@ -1110,9 +1112,10 @@ function App() {
   // Keep latestRef always current — read inside the debounced save to avoid stale closures
   useEffect(() => { latestRef.current = { meals, goals, apiKey, user }; });
 
-  // Firebase auth listener
+  // Firebase auth listener + handle redirect result from signInWithRedirect
   useEffect(() => {
     if (!initFirebase()) return;
+    firebase.auth().getRedirectResult().catch(e => console.error('[Auth] redirect result error:', e));
     const unsub = firebase.auth().onAuthStateChanged(u => {
       setUser(u);
       setAuthReady(true);
@@ -1121,10 +1124,12 @@ function App() {
     return unsub;
   }, []);
 
-  // Show login sheet on first visit when Firebase is configured and no user
+  // Show/hide login sheet based on auth state
   useEffect(() => {
     if (!authReady) return;
-    if (!user && isFirebaseConfigured() && !localStorage.getItem('login-dismissed')) {
+    if (user) {
+      setShowLogin(false);
+    } else if (isFirebaseConfigured() && !localStorage.getItem('login-dismissed')) {
       setShowLogin(true);
     }
   }, [authReady, user]);
@@ -1174,8 +1179,8 @@ function App() {
     if (!isFirebaseConfigured()) return;
     try {
       const provider = new firebase.auth.GoogleAuthProvider();
-      await firebase.auth().signInWithPopup(provider);
-    } catch(e) { if (e.code !== 'auth/popup-closed-by-user') console.error(e); }
+      await firebase.auth().signInWithRedirect(provider);
+    } catch(e) { console.error(e); }
   }
 
   async function handleSignOut() {
