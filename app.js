@@ -592,7 +592,7 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
       React.createElement('div', {
         style: {
           position: 'absolute',
-          top: '30%',
+          top: '33%',
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 30,
@@ -607,7 +607,7 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
           bottom: 0,
           left: 0,
           right: 0,
-          top: '70%',
+          top: '60%',
           backgroundColor: 'white',
           borderTopLeftRadius: 32,
           borderTopRightRadius: 32,
