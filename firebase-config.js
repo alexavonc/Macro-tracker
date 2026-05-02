@@ -23,10 +23,10 @@
 // Leave all fields as empty strings "" to run the app in local-only mode (no auth).
 
 window.FIREBASE_CONFIG = {
-  apiKey: "",
-  authDomain: "",
-  projectId: "",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: ""
+  apiKey: "AIzaSyCZ8VutLzhrsUJ1GuCaDq7_OXxJn9QK_V8",
+  authDomain: "macrotracker-b2d17.firebaseapp.com",
+  projectId: "macrotracker-b2d17",
+  storageBucket: "macrotracker-b2d17.firebasestorage.app",
+  messagingSenderId: "1074198512648",
+  appId: "1:1074198512648:web:4f4dc41dcd929b1c9a7dbd"
 };
