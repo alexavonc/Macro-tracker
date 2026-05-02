@@ -274,15 +274,15 @@ function MealCard({ meal, onDelete }) {
 }
 
 // ─── Meal Entry Form ──────────────────────────────────────────────────────────
-function MealForm({ allMeals, onAdd, onCancel, apiKey }) {
-  const [name, setName] = useState('');
-  const [protein, setProtein] = useState('');
-  const [carbs, setCarbs] = useState('');
-  const [fat, setFat] = useState('');
-  const [calories, setCalories] = useState('');
-  const [serving, setServing] = useState('');
+function MealForm({ allMeals, onAdd, onCancel, apiKey, prefill = null, capturedImage = null, initError = '' }) {
+  const [name, setName] = useState(prefill?.name || '');
+  const [protein, setProtein] = useState(prefill?.protein || '');
+  const [carbs, setCarbs] = useState(prefill?.carbs || '');
+  const [fat, setFat] = useState(prefill?.fat || '');
+  const [calories, setCalories] = useState(prefill?.calories || '');
+  const [serving, setServing] = useState(prefill?.serving || '');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initError);
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
@@ -375,9 +375,13 @@ function MealForm({ allMeals, onAdd, onCancel, apiKey }) {
       React.createElement('div', { className: 'absolute inset-0 bg-black/40', onClick: onCancel }),
       React.createElement('div', { className: 'relative bg-white rounded-t-3xl w-full max-w-lg p-6 pb-10 shadow-2xl' },
         React.createElement('div', { className: 'flex items-center justify-between mb-5' },
-          React.createElement('h2', { className: 'text-lg font-bold text-gray-800' }, 'Add Meal'),
+          React.createElement('h2', { className: 'text-lg font-bold text-gray-800' }, capturedImage ? 'Confirm meal' : 'Add Meal'),
           React.createElement('button', { onClick: onCancel, className: 'text-gray-400 hover:text-gray-600' },
             React.createElement(Icon, { name: 'X', size: 22 }))
+        ),
+
+        capturedImage && React.createElement('div', { style: { display: 'flex', justifyContent: 'center', marginBottom: 16 } },
+          React.createElement('img', { src: capturedImage, style: { width: 96, height: 96, borderRadius: 16, objectFit: 'cover', border: '2px solid #f3f4f6' } })
         ),
 
         // Name + AI button
@@ -453,6 +457,154 @@ function MealForm({ allMeals, onAdd, onCancel, apiKey }) {
             className: 'flex-1 bg-green-500 hover:bg-green-600 text-white rounded-xl py-3 text-sm font-semibold transition-colors'
           }, 'Add Meal')
         )
+      )
+    )
+  );
+}
+
+// ─── Camera Capture ───────────────────────────────────────────────────────────
+function CameraCapture({ allMeals, onAdd, onCancel, apiKey }) {
+  const [tab, setTab]             = useState('meal');
+  const [mode, setMode]           = useState('camera');
+  const [flash, setFlash]         = useState(false);
+  const [capturedImage, setCapturedImage] = useState(null);
+  const [prefill, setPrefill]     = useState(null);
+  const [initError, setInitError] = useState('');
+  const videoRef  = useRef(null);
+  const streamRef = useRef(null);
+
+  useEffect(() => {
+    if (mode !== 'camera') return;
+    if (!navigator.mediaDevices?.getUserMedia) { setMode('type'); return; }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+      .then(stream => {
+        streamRef.current = stream;
+        if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+      })
+      .catch(() => setMode('type'));
+    return () => stopStream();
+  }, [mode]);
+
+  function stopStream() {
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+  }
+
+  async function analyzeBase64(base64, mimeType) {
+    if (!apiKey) { setInitError('Add your Anthropic API key in Settings first.'); stopStream(); setMode('type'); return; }
+    setMode('analyzing');
+    try {
+      const prompt = tab === 'label'
+        ? 'Read this nutrition label for one serving. Reply ONLY with compact JSON: {"name":"product","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"serving size"}'
+        : 'Identify this food and estimate macros for the portion shown. Include local/Asian dishes accurately (laksa, nasi lemak, char kway teow, bak chor mee, roti prata, etc). Reply ONLY with compact JSON: {"name":"food name","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"portion description"}';
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 256,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
+            { type: 'text', text: prompt }
+          ]}]
+        })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const match = (data.content?.[0]?.text || '').match(/\{[\s\S]*\}/);
+      if (!match) throw new Error('No JSON in response');
+      const j = JSON.parse(match[0]);
+      setPrefill({ name: j.name || '', protein: String(Math.round(j.protein || 0)), carbs: String(Math.round(j.carbs || 0)), fat: String(Math.round(j.fat || 0)), calories: String(Math.round(j.calories || calcCals(j.protein, j.carbs, j.fat))), serving: j.serving || '' });
+      setMode('confirm');
+    } catch(e) {
+      console.error(e);
+      setInitError('Could not analyse image. You can edit the details below.');
+      setMode('type');
+    }
+  }
+
+  function capture() {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    setCapturedImage(dataUrl);
+    stopStream();
+    analyzeBase64(dataUrl.split(',')[1], 'image/jpeg');
+  }
+
+  function pickGallery() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = e => {
+      const file = e.target.files?.[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const dataUrl = ev.target.result;
+        setCapturedImage(dataUrl);
+        stopStream();
+        analyzeBase64(dataUrl.split(',')[1], file.type || 'image/jpeg');
+      };
+      reader.readAsDataURL(file);
+    };
+    inp.click();
+  }
+
+  if (mode === 'confirm' || mode === 'type') {
+    return React.createElement(MealForm, { allMeals, onAdd, onCancel, apiKey, prefill: mode === 'confirm' ? prefill : null, capturedImage: mode === 'confirm' ? capturedImage : null, initError });
+  }
+
+  const isAnalyzing = mode === 'analyzing';
+
+  return React.createElement('div', {
+    style: { position: 'fixed', inset: 0, zIndex: 50, background: '#0d0d0d', display: 'flex', flexDirection: 'column' }
+  },
+    // Top bar
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '52px 20px 16px' } },
+      React.createElement('button', { onClick: onCancel, style: { width: 40, height: 40, borderRadius: '50%', background: 'rgba(255,255,255,0.18)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+        React.createElement(Icon, { name: 'X', size: 20, color: 'white' })
+      ),
+      React.createElement('div', { style: { display: 'flex', background: 'rgba(255,255,255,0.14)', borderRadius: 24, padding: 3, gap: 2 } },
+        ['Meal', 'Label'].map(t =>
+          React.createElement('button', { key: t, onClick: () => setTab(t.toLowerCase()), style: { background: tab === t.toLowerCase() ? 'white' : 'transparent', border: 'none', borderRadius: 21, padding: '6px 20px', color: tab === t.toLowerCase() ? '#111' : 'rgba(255,255,255,0.75)', fontWeight: 700, fontSize: 14, cursor: 'pointer' } }, t)
+        )
+      ),
+      React.createElement('button', { onClick: () => setFlash(f => !f), style: { width: 40, height: 40, borderRadius: '50%', background: 'rgba(255,255,255,0.18)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: flash ? 1 : 0.45 } },
+        React.createElement(Icon, { name: 'Zap', size: 20, color: 'white' })
+      )
+    ),
+
+    // Circular camera viewport
+    React.createElement('div', { style: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+      React.createElement('div', { style: { width: '78vw', height: '78vw', maxWidth: 320, maxHeight: 320, borderRadius: '50%', overflow: 'hidden', border: '3px solid rgba(255,255,255,0.22)', position: 'relative', background: '#1a1a1a' } },
+        isAnalyzing
+          ? React.createElement('div', { style: { width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 } },
+              capturedImage && React.createElement('img', { src: capturedImage, style: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.3 } }),
+              React.createElement('div', { style: { width: 44, height: 44, borderRadius: '50%', border: '3px solid white', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite', position: 'relative', zIndex: 1 } }),
+              React.createElement('span', { style: { color: 'white', fontSize: 13, fontWeight: 600, position: 'relative', zIndex: 1 } }, 'Analysing…')
+            )
+          : React.createElement('video', { ref: videoRef, autoPlay: true, playsInline: true, muted: true, style: { width: '100%', height: '100%', objectFit: 'cover' } })
+      )
+    ),
+
+    // Type manually pill
+    React.createElement('div', { style: { display: 'flex', justifyContent: 'center', marginBottom: 20 } },
+      React.createElement('button', { onClick: () => { stopStream(); setMode('type'); }, style: { background: 'rgba(255,255,255,0.13)', border: 'none', borderRadius: 30, padding: '10px 24px', color: 'white', fontWeight: 600, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 } },
+        React.createElement(Icon, { name: 'ChevronUp', size: 15, color: 'white' }),
+        'Type manually'
+      )
+    ),
+
+    // Bottom bar: Gallery | Capture | Type
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 48px 52px' } },
+      React.createElement('button', { onClick: pickGallery, style: { background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 } },
+        React.createElement(Icon, { name: 'Image', size: 26, color: 'white' }),
+        React.createElement('span', { style: { fontSize: 11, color: 'rgba(255,255,255,0.6)' } }, 'Gallery')
+      ),
+      React.createElement('button', { onClick: capture, disabled: isAnalyzing, style: { width: 72, height: 72, borderRadius: '50%', background: 'white', border: '4px solid rgba(255,255,255,0.3)', cursor: isAnalyzing ? 'default' : 'pointer', boxShadow: '0 0 0 8px rgba(255,255,255,0.08)', outline: 'none', padding: 0 } }),
+      React.createElement('button', { onClick: () => { stopStream(); setMode('type'); }, style: { background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 } },
+        React.createElement(Icon, { name: 'Keyboard', size: 26, color: 'white' }),
+        React.createElement('span', { style: { fontSize: 11, color: 'rgba(255,255,255,0.6)' } }, 'Type')
       )
     )
   );
@@ -682,7 +834,7 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
             )
       ),
 
-      showForm && React.createElement(MealForm, {
+      showForm && React.createElement(CameraCapture, {
         allMeals: meals,
         onAdd: meal => { handleMealAdd(meal); setShowForm(false); },
         onCancel: () => setShowForm(false),
@@ -815,6 +967,8 @@ function App() {
   const [goals, setGoals] = useState(() => storageGet(GOALS_KEY) || DEFAULT_GOALS);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('macro-tracker-apikey') || '');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showCamera, setShowCamera] = useState(false);
+  const openCameraRef = useRef(null);
 
   // Persist
   useEffect(() => { storageSet(MEALS_KEY, meals); }, [meals]);
@@ -867,9 +1021,16 @@ function App() {
 
         // Floating + button
         React.createElement('button', {
-          onClick: () => { setPage('home'); },
+          onClick: () => { setPage('home'); setShowCamera(true); },
           className: 'absolute bottom-4 right-4 z-30 w-14 h-14 bg-gray-900 rounded-full shadow-xl flex items-center justify-center hover:bg-gray-700 transition-colors'
         }, React.createElement(Icon, { name: 'Plus', size: 26, color: 'white' })),
+
+        showCamera && React.createElement(CameraCapture, {
+          allMeals: meals,
+          onAdd: meal => { const dk = toDateKey(selectedDate); setMeals(prev => ({ ...prev, [dk]: [...(prev[dk] || []), meal] })); setShowCamera(false); },
+          onCancel: () => setShowCamera(false),
+          apiKey
+        }),
 
         showApiKey && React.createElement(ApiKeyModal, {
           current: apiKey,
