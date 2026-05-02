@@ -563,32 +563,36 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
   }
 
   return (
-    React.createElement('div', { style: { display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', overflow: 'hidden' } },
-
-      // ── Green background layer ──
-      React.createElement('div', {
-        style: { position: 'absolute', inset: 0, bottom: '44%', backgroundColor: '#22c55e' }
-      }),
+    React.createElement('div', {
+      style: {
+        display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', overflow: 'hidden',
+        backgroundImage: "url('/assets/room-bg.png')",
+        backgroundSize: 'cover',
+        backgroundPosition: 'center top',
+      }
+    },
 
       // ── Pet name + hearts (top-left) ──
       React.createElement('div', {
         style: { position: 'absolute', top: 48, left: 20, zIndex: 30 }
       },
-        React.createElement('div', { style: { color: 'white', fontWeight: 900, fontSize: 28, lineHeight: 1 } }, 'Bagel'),
+        React.createElement('div', {
+          style: { color: 'white', fontWeight: 900, fontSize: 28, lineHeight: 1, textShadow: '1px 1px 0 rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4)' }
+        }, 'Bagel'),
         React.createElement(PetHearts, { calPct: isToday ? calPct : 0 })
       ),
 
       // ── Settings gear (top-right) ──
       React.createElement('button', {
         onClick: onOpenSettings,
-        style: { position: 'absolute', top: 52, right: 20, zIndex: 30, background: 'none', border: 'none', cursor: 'pointer' }
+        style: { position: 'absolute', top: 52, right: 20, zIndex: 30, background: 'none', border: 'none', cursor: 'pointer', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.5))' }
       }, React.createElement(Icon, { name: 'Settings', size: 22, color: 'white' })),
 
-      // ── Cat (centered, sits at green/white boundary) ──
+      // ── Cat (sitting on carpet) ──
       React.createElement('div', {
         style: {
           position: 'absolute',
-          top: '12%',
+          top: '38%',
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 30,
@@ -603,7 +607,7 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
           bottom: 0,
           left: 0,
           right: 0,
-          top: '44%',
+          top: '65%',
           backgroundColor: 'white',
           borderTopLeftRadius: 32,
           borderTopRightRadius: 32,
