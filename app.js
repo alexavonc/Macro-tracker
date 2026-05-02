@@ -15,6 +15,20 @@ function storageSet(key, value) {
   try { window.localStorage.setItem(key, JSON.stringify(value)); } catch {}
 }
 
+// ─── Firebase helpers ─────────────────────────────────────────────────────────
+function isFirebaseConfigured() {
+  const c = window.FIREBASE_CONFIG;
+  return !!(c && c.apiKey && c.projectId);
+}
+
+function initFirebase() {
+  if (!isFirebaseConfigured()) return false;
+  try {
+    if (!firebase.apps.length) firebase.initializeApp(window.FIREBASE_CONFIG);
+    return true;
+  } catch(e) { console.error('[Firebase] init failed:', e); return false; }
+}
+
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 function toDateKey(date) {
   return date.toISOString().split('T')[0];
@@ -640,25 +654,141 @@ function GoalsEditor({ goals, onChange }) {
   );
 }
 
-// ─── API Key modal ────────────────────────────────────────────────────────────
-function ApiKeyModal({ current, onSave, onClose }) {
-  const [val, setVal] = useState(current || '');
-  return (
-    React.createElement('div', { className: 'fixed inset-0 z-50 flex items-center justify-center' },
-      React.createElement('div', { className: 'absolute inset-0 bg-black/40', onClick: onClose }),
-      React.createElement('div', { className: 'relative bg-white rounded-2xl w-80 p-6 shadow-2xl' },
-        React.createElement('h2', { className: 'font-bold text-gray-800 mb-3' }, 'Anthropic API Key'),
-        React.createElement('p', { className: 'text-xs text-gray-500 mb-4' }, 'Required for AI macro lookup. Your key is stored locally only.'),
-        React.createElement('input', {
-          type: 'password',
-          className: 'w-full border border-gray-200 rounded-xl px-4 py-3 text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-green-400',
-          placeholder: 'sk-ant-...',
-          value: val,
-          onChange: e => setVal(e.target.value)
-        }),
-        React.createElement('div', { className: 'flex gap-3' },
-          React.createElement('button', { onClick: onClose, className: 'flex-1 border border-gray-200 rounded-xl py-2.5 text-sm font-semibold text-gray-600' }, 'Cancel'),
-          React.createElement('button', { onClick: () => onSave(val.trim()), className: 'flex-1 bg-green-500 text-white rounded-xl py-2.5 text-sm font-semibold' }, 'Save')
+// ─── Google icon SVG ──────────────────────────────────────────────────────────
+function GoogleIcon({ size = 18 }) {
+  return React.createElement('svg', { width: size, height: size, viewBox: '0 0 24 24', style: { flexShrink: 0 } },
+    React.createElement('path', { d: 'M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z', fill: '#4285F4' }),
+    React.createElement('path', { d: 'M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z', fill: '#34A853' }),
+    React.createElement('path', { d: 'M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z', fill: '#FBBC05' }),
+    React.createElement('path', { d: 'M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z', fill: '#EA4335' })
+  );
+}
+
+// ─── Login Sheet (first-visit prompt) ────────────────────────────────────────
+function LoginSheet({ onDismiss }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+
+  async function signIn() {
+    setLoading(true); setError('');
+    try {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await firebase.auth().signInWithPopup(provider);
+    } catch(e) {
+      if (e.code !== 'auth/popup-closed-by-user') setError('Sign-in failed. Please try again.');
+    } finally { setLoading(false); }
+  }
+
+  return React.createElement('div', { style: { position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end' } },
+    React.createElement('div', { style: { background: 'white', borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: '28px 24px 52px', width: '100%' } },
+      React.createElement('div', { style: { width: 36, height: 4, background: '#e5e7eb', borderRadius: 2, margin: '0 auto 24px' } }),
+      React.createElement('div', { style: { textAlign: 'center', marginBottom: 28 } },
+        React.createElement('div', { style: { fontSize: 44, marginBottom: 10 } }, '🐱'),
+        React.createElement('h2', { style: { fontSize: 20, fontWeight: 900, color: '#111', margin: '0 0 8px' } }, 'Sync your progress'),
+        React.createElement('p', { style: { fontSize: 13, color: '#6b7280', margin: 0, lineHeight: 1.5 } }, 'Sign in with Google to save your meals and settings across all your devices.')
+      ),
+      error && React.createElement('p', { style: { color: '#ef4444', fontSize: 13, textAlign: 'center', marginBottom: 12 } }, error),
+      React.createElement('button', {
+        onClick: signIn, disabled: loading,
+        style: { width: '100%', background: 'white', border: '1.5px solid #e5e7eb', borderRadius: 14, padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, cursor: 'pointer', marginBottom: 12, fontSize: 15, fontWeight: 600, color: '#374151', boxShadow: '0 1px 3px rgba(0,0,0,.08)' }
+      },
+        React.createElement(GoogleIcon, { size: 20 }),
+        loading ? 'Signing in…' : 'Continue with Google'
+      ),
+      React.createElement('button', {
+        onClick: onDismiss,
+        style: { width: '100%', background: 'none', border: 'none', padding: 10, fontSize: 14, color: '#9ca3af', cursor: 'pointer' }
+      }, 'Continue without signing in')
+    )
+  );
+}
+
+// ─── Settings Sheet ───────────────────────────────────────────────────────────
+function SettingsSheet({ user, apiKey, onSaveApiKey, onSignIn, onSignOut, onClose }) {
+  const [keyVal, setKeyVal] = useState(apiKey || '');
+  const [showKey, setShowKey] = useState(false);
+  const [saved, setSaved]     = useState(false);
+
+  function handleSave() {
+    onSaveApiKey(keyVal.trim());
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  const avatar = user?.photoURL
+    ? React.createElement('img', { src: user.photoURL, alt: '', style: { width: 44, height: 44, borderRadius: '50%', border: '2px solid white', boxShadow: '0 1px 4px rgba(0,0,0,.12)', flexShrink: 0 } })
+    : React.createElement('div', { style: { width: 44, height: 44, borderRadius: '50%', background: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: '#16a34a', flexShrink: 0 } },
+        (user?.displayName || user?.email || 'U')[0].toUpperCase()
+      );
+
+  return React.createElement('div', { style: { position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'flex-end' } },
+    React.createElement('div', { style: { position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)' }, onClick: onClose }),
+    React.createElement('div', { style: { position: 'relative', background: 'white', borderTopLeftRadius: 28, borderTopRightRadius: 28, width: '100%', padding: '20px 20px 48px' } },
+      React.createElement('div', { style: { width: 36, height: 4, background: '#e5e7eb', borderRadius: 2, margin: '0 auto 18px' } }),
+
+      // Header
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 } },
+        React.createElement('h2', { style: { fontSize: 18, fontWeight: 800, color: '#111', margin: 0 } }, 'Settings'),
+        React.createElement('button', { onClick: onClose, style: { background: '#f3f4f6', border: 'none', borderRadius: '50%', width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+          React.createElement(Icon, { name: 'X', size: 16 })
+        )
+      ),
+
+      // Account section
+      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 } }, 'Account'),
+      user
+        ? React.createElement('div', { style: { background: '#f9fafb', borderRadius: 16, padding: 14, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 } },
+            avatar,
+            React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+              React.createElement('div', { style: { fontWeight: 700, fontSize: 14, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, user.displayName || 'User'),
+              React.createElement('div', { style: { fontSize: 12, color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, user.email),
+              React.createElement('div', { style: { fontSize: 11, color: '#22c55e', marginTop: 3, fontWeight: 600 } }, '✓ Syncing to cloud')
+            ),
+            React.createElement('button', {
+              onClick: onSignOut,
+              style: { background: '#fee2e2', border: 'none', borderRadius: 10, padding: '7px 14px', fontSize: 12, fontWeight: 600, color: '#ef4444', cursor: 'pointer', flexShrink: 0 }
+            }, 'Sign out')
+          )
+        : isFirebaseConfigured()
+          ? React.createElement('button', {
+              onClick: onSignIn,
+              style: { width: '100%', background: 'white', border: '1.5px solid #e5e7eb', borderRadius: 14, padding: '13px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, cursor: 'pointer', marginBottom: 20, fontSize: 14, fontWeight: 600, color: '#374151', boxShadow: '0 1px 3px rgba(0,0,0,.08)' }
+            },
+              React.createElement(GoogleIcon),
+              'Continue with Google'
+            )
+          : React.createElement('div', { style: { background: '#f9fafb', borderRadius: 14, padding: '12px 14px', marginBottom: 20 } },
+              React.createElement('p', { style: { fontSize: 12, color: '#9ca3af', margin: 0, lineHeight: 1.5 } }, 'Cloud sync not configured. Fill in firebase-config.js to enable Google sign-in.')
+            ),
+
+      // API Keys section
+      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 } }, 'API Keys'),
+      React.createElement('div', { style: { background: '#f9fafb', borderRadius: 16, padding: 16 } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 } },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#374151' } }, 'Anthropic API Key'),
+          user && React.createElement('span', { style: { fontSize: 11, color: '#22c55e', fontWeight: 600 } }, '☁ saved to account')
+        ),
+        React.createElement('p', { style: { fontSize: 11, color: '#9ca3af', margin: '0 0 10px', lineHeight: 1.4 } },
+          user ? 'Stored securely in your account — no need to re-enter on new devices.' : 'Required for AI macro lookup. Sign in to save permanently.'
+        ),
+        React.createElement('div', { style: { display: 'flex', gap: 8 } },
+          React.createElement('div', { style: { position: 'relative', flex: 1 } },
+            React.createElement('input', {
+              type: showKey ? 'text' : 'password',
+              value: keyVal,
+              onChange: e => { setKeyVal(e.target.value); setSaved(false); },
+              placeholder: 'sk-ant-...',
+              style: { width: '100%', border: '1.5px solid #e5e7eb', borderRadius: 12, padding: '10px 36px 10px 12px', fontSize: 13, boxSizing: 'border-box', outline: 'none', fontFamily: 'monospace' }
+            }),
+            React.createElement('button', {
+              onClick: () => setShowKey(s => !s),
+              style: { position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#9ca3af' }
+            }, React.createElement(Icon, { name: showKey ? 'EyeOff' : 'Eye', size: 15 }))
+          ),
+          React.createElement('button', {
+            onClick: handleSave,
+            style: { background: saved ? '#22c55e' : '#111', color: 'white', border: 'none', borderRadius: 12, padding: '10px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }
+          }, saved ? '✓' : 'Save')
         )
       )
     )
@@ -964,19 +1094,73 @@ function AnalyticsPage({ meals }) {
 
 // ─── Root App ─────────────────────────────────────────────────────────────────
 function App() {
-  const [page, setPage] = useState('home');
+  const [page, setPage]               = useState('home');
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [meals, setMeals] = useState(() => storageGet(MEALS_KEY) || {});
-  const [goals, setGoals] = useState(() => storageGet(GOALS_KEY) || DEFAULT_GOALS);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('macro-tracker-apikey') || '');
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [showCamera, setShowCamera] = useState(false);
-  const openCameraRef = useRef(null);
+  const [meals, setMeals]             = useState(() => storageGet(MEALS_KEY) || {});
+  const [goals, setGoals]             = useState(() => storageGet(GOALS_KEY) || DEFAULT_GOALS);
+  const [apiKey, setApiKey]           = useState(() => localStorage.getItem('macro-tracker-apikey') || '');
+  const [showSettings, setShowSettings] = useState(false);
+  const [showCamera, setShowCamera]   = useState(false);
+  const [showLogin, setShowLogin]     = useState(false);
+  const [user, setUser]               = useState(null);
+  const [authReady, setAuthReady]     = useState(!isFirebaseConfigured());
+  const firestoreSaveRef = useRef(null);
+  const latestRef        = useRef(null);
 
-  // Persist
-  useEffect(() => { storageSet(MEALS_KEY, meals); }, [meals]);
-  useEffect(() => { storageSet(GOALS_KEY, goals); }, [goals]);
-  useEffect(() => { localStorage.setItem('macro-tracker-apikey', apiKey); }, [apiKey]);
+  // Keep latestRef always current — read inside the debounced save to avoid stale closures
+  useEffect(() => { latestRef.current = { meals, goals, apiKey, user }; });
+
+  // Firebase auth listener
+  useEffect(() => {
+    if (!initFirebase()) return;
+    const unsub = firebase.auth().onAuthStateChanged(u => {
+      setUser(u);
+      setAuthReady(true);
+      if (u) loadUserData(u);
+    });
+    return unsub;
+  }, []);
+
+  // Show login sheet on first visit when Firebase is configured and no user
+  useEffect(() => {
+    if (!authReady) return;
+    if (!user && isFirebaseConfigured() && !localStorage.getItem('login-dismissed')) {
+      setShowLogin(true);
+    }
+  }, [authReady, user]);
+
+  async function loadUserData(u) {
+    try {
+      const snap = await firebase.firestore().collection('users').doc(u.uid).get();
+      if (!snap.exists) return;
+      const d = snap.data();
+      if (d.goals) setGoals(d.goals);
+      if (d.anthropicApiKey) {
+        setApiKey(d.anthropicApiKey);
+        localStorage.setItem('macro-tracker-apikey', d.anthropicApiKey);
+      }
+      if (d.meals && Object.keys(d.meals).length > 0) {
+        setMeals(d.meals);
+        storageSet(MEALS_KEY, d.meals);
+      }
+    } catch(e) { console.error('[Firestore] Load failed:', e); }
+  }
+
+  function scheduleFirestoreSave() {
+    clearTimeout(firestoreSaveRef.current);
+    firestoreSaveRef.current = setTimeout(async () => {
+      const { meals, goals, apiKey, user: u } = latestRef.current || {};
+      if (!u || !isFirebaseConfigured()) return;
+      try {
+        await firebase.firestore().collection('users').doc(u.uid).set({ meals, goals, anthropicApiKey: apiKey });
+      } catch(e) { console.error('[Firestore] Save failed:', e); }
+    }, 1500);
+  }
+
+  // Persist to localStorage; schedule Firestore save on any data change
+  useEffect(() => { storageSet(MEALS_KEY, meals); scheduleFirestoreSave(); }, [meals]);
+  useEffect(() => { storageSet(GOALS_KEY, goals); scheduleFirestoreSave(); }, [goals]);
+  useEffect(() => { localStorage.setItem('macro-tracker-apikey', apiKey); scheduleFirestoreSave(); }, [apiKey]);
 
   function addMeal(dateKey, meal) {
     setMeals(prev => ({ ...prev, [dateKey]: [...(prev[dateKey] || []), meal] }));
@@ -986,61 +1170,85 @@ function App() {
     setMeals(prev => ({ ...prev, [dateKey]: (prev[dateKey] || []).filter(m => m.id !== id) }));
   }
 
+  async function handleSignIn() {
+    if (!isFirebaseConfigured()) return;
+    try {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await firebase.auth().signInWithPopup(provider);
+    } catch(e) { if (e.code !== 'auth/popup-closed-by-user') console.error(e); }
+  }
+
+  async function handleSignOut() {
+    await firebase.auth().signOut();
+    setUser(null);
+    setShowSettings(false);
+  }
+
+  // Spinner while Firebase checks auth state
+  if (!authReady) {
+    return React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#f9fafb' } },
+      React.createElement('div', { style: { width: 36, height: 36, borderRadius: '50%', border: '3px solid #e5e7eb', borderTopColor: '#22c55e', animation: 'spin 0.8s linear infinite' } })
+    );
+  }
+
   return (
     React.createElement('div', { className: 'relative w-full h-screen bg-gray-50 flex flex-col overflow-hidden' },
 
-        // Pages
-        React.createElement('div', { className: 'flex-1 overflow-hidden' },
-          page === 'home'
-            ? React.createElement(HomePage, {
-                meals, goals, apiKey,
-                onGoalsChange: g => setGoals(g),
-                onAddMeal: addMeal,
-                onDeleteMeal: deleteMeal,
-                selectedDate,
-                onDateChange: setSelectedDate,
-                onOpenSettings: () => setShowApiKey(true),
-              })
-            : React.createElement(AnalyticsPage, { meals })
-        ),
+      // Pages
+      React.createElement('div', { className: 'flex-1 overflow-hidden' },
+        page === 'home'
+          ? React.createElement(HomePage, {
+              meals, goals, apiKey,
+              onGoalsChange: g => setGoals(g),
+              onAddMeal: addMeal,
+              onDeleteMeal: deleteMeal,
+              selectedDate,
+              onDateChange: setSelectedDate,
+              onOpenSettings: () => setShowSettings(true),
+            })
+          : React.createElement(AnalyticsPage, { meals })
+      ),
 
-        // Bottom nav
-        React.createElement('div', { className: 'absolute bottom-6 left-0 right-0 flex justify-center px-4 z-20' },
-          React.createElement('div', { className: 'bg-white rounded-full shadow-lg px-6 py-3 flex items-center gap-6' },
-            React.createElement('button', {
-              onClick: () => setPage('home'),
-              className: `flex flex-col items-center gap-0.5 ${page === 'home' ? 'text-gray-900' : 'text-gray-300'}`
-            },
-              React.createElement(Icon, { name: 'Home', size: 22, color: page === 'home' ? '#111' : '#d1d5db' })
-            ),
-            React.createElement('button', {
-              onClick: () => setPage('analytics'),
-              className: `flex flex-col items-center gap-0.5 ${page === 'analytics' ? 'text-gray-900' : 'text-gray-300'}`
-            },
-              React.createElement(Icon, { name: 'BarChart3', size: 22, color: page === 'analytics' ? '#111' : '#d1d5db' })
-            )
-          )
-        ),
+      // Bottom nav
+      React.createElement('div', { className: 'absolute bottom-6 left-0 right-0 flex justify-center px-4 z-20' },
+        React.createElement('div', { className: 'bg-white rounded-full shadow-lg px-6 py-3 flex items-center gap-6' },
+          React.createElement('button', {
+            onClick: () => setPage('home'),
+            className: `flex flex-col items-center gap-0.5 ${page === 'home' ? 'text-gray-900' : 'text-gray-300'}`
+          }, React.createElement(Icon, { name: 'Home', size: 22, color: page === 'home' ? '#111' : '#d1d5db' })),
+          React.createElement('button', {
+            onClick: () => setPage('analytics'),
+            className: `flex flex-col items-center gap-0.5 ${page === 'analytics' ? 'text-gray-900' : 'text-gray-300'}`
+          }, React.createElement(Icon, { name: 'BarChart3', size: 22, color: page === 'analytics' ? '#111' : '#d1d5db' }))
+        )
+      ),
 
-        // Floating + button
-        React.createElement('button', {
-          onClick: () => { setPage('home'); setShowCamera(true); },
-          className: 'absolute bottom-4 right-4 z-30 w-14 h-14 bg-gray-900 rounded-full shadow-xl flex items-center justify-center hover:bg-gray-700 transition-colors'
-        }, React.createElement(Icon, { name: 'Plus', size: 26, color: 'white' })),
+      // Floating + button
+      React.createElement('button', {
+        onClick: () => { setPage('home'); setShowCamera(true); },
+        className: 'absolute bottom-4 right-4 z-30 w-14 h-14 bg-gray-900 rounded-full shadow-xl flex items-center justify-center hover:bg-gray-700 transition-colors'
+      }, React.createElement(Icon, { name: 'Plus', size: 26, color: 'white' })),
 
-        showCamera && React.createElement(CameraCapture, {
-          allMeals: meals,
-          onAdd: meal => { const dk = toDateKey(selectedDate); setMeals(prev => ({ ...prev, [dk]: [...(prev[dk] || []), meal] })); setShowCamera(false); },
-          onCancel: () => setShowCamera(false),
-          apiKey
-        }),
+      showCamera && React.createElement(CameraCapture, {
+        allMeals: meals,
+        onAdd: meal => { addMeal(toDateKey(selectedDate), meal); setShowCamera(false); },
+        onCancel: () => setShowCamera(false),
+        apiKey
+      }),
 
-        showApiKey && React.createElement(ApiKeyModal, {
-          current: apiKey,
-          onSave: k => { setApiKey(k); setShowApiKey(false); },
-          onClose: () => setShowApiKey(false)
-        })
-      )
+      showSettings && React.createElement(SettingsSheet, {
+        user,
+        apiKey,
+        onSaveApiKey: k => setApiKey(k),
+        onSignIn: handleSignIn,
+        onSignOut: handleSignOut,
+        onClose: () => setShowSettings(false)
+      }),
+
+      showLogin && React.createElement(LoginSheet, {
+        onDismiss: () => { localStorage.setItem('login-dismissed', '1'); setShowLogin(false); }
+      })
+    )
   );
 }
 
