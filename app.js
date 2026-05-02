@@ -567,8 +567,8 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
       style: {
         display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', overflow: 'hidden',
         backgroundImage: "url('/assets/room-bg.PNG')",
-        backgroundSize: 'cover',
-        backgroundPosition: 'center top',
+        backgroundSize: 'auto 105%',
+        backgroundPosition: 'center bottom',
       }
     },
 
@@ -592,7 +592,7 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
       React.createElement('div', {
         style: {
           position: 'absolute',
-          top: '33%',
+          top: '28%',
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 30,
