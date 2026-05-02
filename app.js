@@ -592,7 +592,7 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
       React.createElement('div', {
         style: {
           position: 'absolute',
-          top: '33%',
+          top: '32%',
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 30,
