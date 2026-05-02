@@ -566,7 +566,7 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
     React.createElement('div', {
       style: {
         display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', overflow: 'hidden',
-        backgroundImage: "url('/assets/room-bg.png')",
+        backgroundImage: "url('/assets/room-bg.PNG')",
         backgroundSize: 'cover',
         backgroundPosition: 'center top',
       }
