@@ -494,7 +494,7 @@ function CameraCapture({ allMeals, onAdd, onCancel, apiKey }) {
     setMode('analyzing');
     try {
       const prompt = tab === 'label'
-        ? 'Read this nutrition label for one serving. Reply ONLY with compact JSON: {"name":"product","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"serving size"}'
+        ? 'This is a nutrition facts label. Use OCR to read all text on the label precisely. Find and extract these exact values per serving: Calories, Total Fat (g), Total Carbohydrate (g), Protein (g), and the serving size description. Reply ONLY with compact JSON, no other text: {"name":"product name","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"serving size from label"}'
         : 'Identify this food and estimate macros for the portion shown. Include local/Asian dishes accurately (laksa, nasi lemak, char kway teow, bak chor mee, roti prata, etc). Reply ONLY with compact JSON: {"name":"food name","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"portion description"}';
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -576,7 +576,10 @@ function CameraCapture({ allMeals, onAdd, onCancel, apiKey }) {
 
     // Circular camera viewport
     React.createElement('div', { style: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' } },
-      React.createElement('div', { style: { width: '78vw', height: '78vw', maxWidth: 320, maxHeight: 320, borderRadius: '50%', overflow: 'hidden', border: '3px solid rgba(255,255,255,0.22)', position: 'relative', background: '#1a1a1a' } },
+      React.createElement('div', { style: tab === 'label'
+        ? { width: '88vw', height: '56vh', maxWidth: 480, borderRadius: 16, overflow: 'hidden', border: '3px solid rgba(255,255,255,0.22)', position: 'relative', background: '#1a1a1a' }
+        : { width: '92vw', height: '92vw', maxWidth: 420, maxHeight: 420, borderRadius: '50%', overflow: 'hidden', border: '3px solid rgba(255,255,255,0.22)', position: 'relative', background: '#1a1a1a' }
+      },
         isAnalyzing
           ? React.createElement('div', { style: { width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 } },
               capturedImage && React.createElement('img', { src: capturedImage, style: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.3 } }),
