@@ -1,8 +1,13 @@
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
+const http  = require('http');
+const https = require('https');
+const fs    = require('fs');
+const path  = require('path');
 
 const PORT = process.env.PORT || 8080;
+
+// Firebase project auth domain — proxy /__/ requests here so Safari's
+// third-party cookie blocking doesn't break signInWithRedirect.
+const FIREBASE_AUTH_DOMAIN = 'macrotracker-b2d17.firebaseapp.com';
 
 const types = {
   '.html': 'text/html',
@@ -14,6 +19,25 @@ const types = {
 };
 
 http.createServer((req, res) => {
+
+  // Proxy Firebase auth handler so auth stays same-origin (fixes iOS Safari)
+  if (req.url.startsWith('/__/')) {
+    const headers = { ...req.headers, host: FIREBASE_AUTH_DOMAIN };
+    delete headers['connection'];
+    const proxyReq = https.request(
+      { hostname: FIREBASE_AUTH_DOMAIN, path: req.url, method: req.method, headers },
+      proxyRes => {
+        const outHeaders = { ...proxyRes.headers };
+        delete outHeaders['transfer-encoding'];
+        res.writeHead(proxyRes.statusCode, outHeaders);
+        proxyRes.pipe(res);
+      }
+    );
+    proxyReq.on('error', e => { console.error('[proxy]', e.message); res.writeHead(502); res.end(); });
+    req.pipe(proxyReq);
+    return;
+  }
+
   const urlPath  = req.url === '/' ? 'index.html' : req.url;
   const ext      = path.extname(urlPath);
   const contentType = types[ext] || 'text/plain';
