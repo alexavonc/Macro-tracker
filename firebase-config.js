@@ -24,7 +24,7 @@
 
 window.FIREBASE_CONFIG = {
   apiKey: "AIzaSyCZ8VutLzhrsUJ1GuCaDq7_OXxJn9QK_V8",
-  authDomain: "macro-tracker-production-662f.up.railway.app",
+  authDomain: "macrotracker-b2d17.firebaseapp.com",
   projectId: "macrotracker-b2d17",
   storageBucket: "macrotracker-b2d17.firebasestorage.app",
   messagingSenderId: "1074198512648",

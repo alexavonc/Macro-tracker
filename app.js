@@ -671,13 +671,21 @@ function LoginSheet({ onDismiss }) {
 
   async function signIn() {
     setLoading(true); setError('');
+    const provider = new firebase.auth.GoogleAuthProvider();
     try {
-      const provider = new firebase.auth.GoogleAuthProvider();
-      await firebase.auth().signInWithRedirect(provider);
-      // page will navigate away — no finally cleanup needed
+      await firebase.auth().signInWithPopup(provider);
+      // onAuthStateChanged will dismiss the sheet
     } catch(e) {
-      setError('Sign-in failed. Please try again.');
-      setLoading(false);
+      if (e.code === 'auth/popup-blocked' || e.code === 'auth/cancelled-popup-request') {
+        // Popup blocked (common on mobile) — fall back to full-page redirect
+        try { await firebase.auth().signInWithRedirect(provider); } catch(e2) {
+          setError('Sign-in failed. Please try again.'); setLoading(false);
+        }
+      } else if (e.code === 'auth/popup-closed-by-user') {
+        setLoading(false);
+      } else {
+        setError('Sign-in failed. Please try again.'); setLoading(false);
+      }
     }
   }
 
@@ -1187,10 +1195,14 @@ function App() {
 
   async function handleSignIn() {
     if (!isFirebaseConfigured()) return;
+    const provider = new firebase.auth.GoogleAuthProvider();
     try {
-      const provider = new firebase.auth.GoogleAuthProvider();
-      await firebase.auth().signInWithRedirect(provider);
-    } catch(e) { console.error(e); }
+      await firebase.auth().signInWithPopup(provider);
+    } catch(e) {
+      if (e.code === 'auth/popup-blocked' || e.code === 'auth/cancelled-popup-request') {
+        try { await firebase.auth().signInWithRedirect(provider); } catch(e2) { console.error(e2); }
+      } else if (e.code !== 'auth/popup-closed-by-user') { console.error(e); }
+    }
   }
 
   async function handleSignOut() {
