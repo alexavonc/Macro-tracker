@@ -630,23 +630,25 @@ function CameraCapture({ allMeals, onAdd, onCancel, apiKey }) {
 // ─── Goals Editor ─────────────────────────────────────────────────────────────
 function GoalsEditor({ goals, onChange }) {
   const fields = [
-    { key: 'protein', label: 'Protein', unit: 'g' },
-    { key: 'carbs', label: 'Carbs', unit: 'g' },
-    { key: 'fat', label: 'Fat', unit: 'g' },
+    { key: 'calories', label: 'Calories', unit: 'kcal' },
+    { key: 'protein',  label: 'Protein',  unit: 'g' },
+    { key: 'carbs',    label: 'Carbs',    unit: 'g' },
+    { key: 'fat',      label: 'Fat',      unit: 'g' },
   ];
   return (
-    React.createElement('div', { className: 'flex gap-3 mt-3' },
+    React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 4 } },
       fields.map(f =>
-        React.createElement('div', { key: f.key, className: 'flex-1' },
-          React.createElement('label', { className: 'text-xs text-gray-500 block mb-1' }, f.label),
-          React.createElement('div', { className: 'flex items-center border border-gray-200 rounded-xl overflow-hidden' },
+        React.createElement('div', { key: f.key },
+          React.createElement('label', { style: { fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 5 } }, f.label),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', border: '1.5px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: 'white' } },
             React.createElement('input', {
               type: 'number',
-              className: 'flex-1 w-0 px-2 py-2 text-sm text-center focus:outline-none',
-              value: goals[f.key],
+              style: { flex: 1, minWidth: 0, padding: '9px 8px', fontSize: 14, textAlign: 'center', border: 'none', outline: 'none', background: 'transparent' },
+              value: goals[f.key] || '',
+              placeholder: '0',
               onChange: e => onChange({ ...goals, [f.key]: Number(e.target.value) || 0 })
             }),
-            React.createElement('span', { className: 'text-xs text-gray-400 pr-2' }, f.unit)
+            React.createElement('span', { style: { fontSize: 11, color: '#9ca3af', paddingRight: 8, whiteSpace: 'nowrap' } }, f.unit)
           )
         )
       )
@@ -714,7 +716,7 @@ function LoginSheet({ onDismiss }) {
 }
 
 // ─── Settings Sheet ───────────────────────────────────────────────────────────
-function SettingsSheet({ user, apiKey, onSaveApiKey, onSignIn, onSignOut, onClose }) {
+function SettingsSheet({ user, apiKey, onSaveApiKey, goals, onGoalsChange, onSignIn, onSignOut, onClose }) {
   const [keyVal, setKeyVal] = useState(apiKey || '');
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved]     = useState(false);
@@ -771,6 +773,13 @@ function SettingsSheet({ user, apiKey, onSaveApiKey, onSignIn, onSignOut, onClos
               React.createElement('p', { style: { fontSize: 12, color: '#9ca3af', margin: 0, lineHeight: 1.5 } }, 'Cloud sync not configured. Fill in firebase-config.js to enable Google sign-in.')
             ),
 
+      // Daily Goals section
+      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 } }, 'Daily Goals'),
+      React.createElement('div', { style: { background: '#f9fafb', borderRadius: 16, padding: 16, marginBottom: 20 } },
+        React.createElement('p', { style: { fontSize: 11, color: '#9ca3af', margin: '0 0 12px', lineHeight: 1.4 } }, 'Only changes your targets — existing meal history is never affected.'),
+        React.createElement(GoalsEditor, { goals, onChange: onGoalsChange })
+      ),
+
       // API Keys section
       React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 } }, 'API Keys'),
       React.createElement('div', { style: { background: '#f9fafb', borderRadius: 16, padding: 16 } },
@@ -806,9 +815,8 @@ function SettingsSheet({ user, apiKey, onSaveApiKey, onSignIn, onSignOut, onClos
 }
 
 // ─── Home Page ────────────────────────────────────────────────────────────────
-function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, selectedDate, onDateChange, apiKey, onOpenSettings }) {
+function HomePage({ meals, goals, onAddMeal, onDeleteMeal, selectedDate, onDateChange, apiKey, onOpenSettings }) {
   const [showForm, setShowForm] = useState(false);
-  const [editGoals, setEditGoals] = useState(false);
   const [justFed, setJustFed] = useState(false);
   const [evolveActive, setEvolveActive] = useState(false);
   const fedTimerRef = useRef(null);
@@ -825,7 +833,7 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
     calories:acc.calories+ (Number(m.calories)|| 0),
   }), { protein: 0, carbs: 0, fat: 0, calories: 0 });
 
-  const goalCals = goals.protein * 4 + goals.carbs * 4 + goals.fat * 9;
+  const goalCals = goals.calories || (goals.protein * 4 + goals.carbs * 4 + goals.fat * 9);
   const calPct   = goalCals > 0 ? totals.calories / goalCals : 0;
   const calsLeft = Math.round(goalCals - totals.calories);
   const calsOver = calsLeft < 0;
@@ -950,18 +958,10 @@ function HomePage({ meals, goals, onGoalsChange, onAddMeal, onDeleteMeal, select
             React.createElement(MacroBar, { label: 'Proteins', value: totals.protein, goal: goals.protein })
           ),
 
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTop: '1px solid #f3f4f6' } },
-            React.createElement('button', {
-              onClick: () => setEditGoals(g => !g),
-              style: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 4 }
-            },
-              React.createElement(Icon, { name: 'Target', size: 12 }),
-              ` Goal: ${Math.round(goalCals).toLocaleString()} kcal`
-            ),
-            React.createElement('span', { style: { color: '#d1d5db', fontSize: 18 } }, '···')
-          ),
-
-          editGoals && React.createElement(GoalsEditor, { goals, onChange: onGoalsChange })
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', marginTop: 12, paddingTop: 12, borderTop: '1px solid #f3f4f6' } },
+            React.createElement(Icon, { name: 'Target', size: 12, color: '#9ca3af' }),
+            React.createElement('span', { style: { fontSize: 11, color: '#9ca3af', marginLeft: 4 } }, `Goal: ${Math.round(goalCals).toLocaleString()} kcal · edit in Settings`)
+          )
         ),
 
         // Meals list
@@ -1226,7 +1226,6 @@ function App() {
         page === 'home'
           ? React.createElement(HomePage, {
               meals, goals, apiKey,
-              onGoalsChange: g => setGoals(g),
               onAddMeal: addMeal,
               onDeleteMeal: deleteMeal,
               selectedDate,
@@ -1267,6 +1266,8 @@ function App() {
         user,
         apiKey,
         onSaveApiKey: k => setApiKey(k),
+        goals,
+        onGoalsChange: g => setGoals(g),
         onSignIn: handleSignIn,
         onSignOut: handleSignOut,
         onClose: () => setShowSettings(false)
