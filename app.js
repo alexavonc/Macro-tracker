@@ -1115,24 +1115,34 @@ function App() {
   // Firebase auth listener + handle redirect result from signInWithRedirect
   useEffect(() => {
     if (!initFirebase()) return;
-    firebase.auth().getRedirectResult().catch(e => console.error('[Auth] redirect result error:', e));
+
+    // Handle the redirect return — fires before onAuthStateChanged on a fresh page load
+    firebase.auth().getRedirectResult().then(result => {
+      if (result && result.user) {
+        setUser(result.user);
+        setShowLogin(false);
+        loadUserData(result.user);
+      }
+    }).catch(e => console.error('[Auth] redirect result error:', e));
+
     const unsub = firebase.auth().onAuthStateChanged(u => {
       setUser(u);
       setAuthReady(true);
-      if (u) loadUserData(u);
+      if (u) {
+        setShowLogin(false);
+        loadUserData(u);
+      }
     });
     return unsub;
   }, []);
 
-  // Show/hide login sheet based on auth state
+  // Show login sheet only once auth is resolved and no user is present
   useEffect(() => {
     if (!authReady) return;
-    if (user) {
-      setShowLogin(false);
-    } else if (isFirebaseConfigured() && !localStorage.getItem('login-dismissed')) {
+    if (!user && isFirebaseConfigured() && !localStorage.getItem('login-dismissed')) {
       setShowLogin(true);
     }
-  }, [authReady, user]);
+  }, [authReady]);
 
   async function loadUserData(u) {
     try {
