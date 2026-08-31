@@ -38,6 +38,49 @@ http.createServer((req, res) => {
     return;
   }
 
+  // Proxy the Anthropic Messages API server-side so the API key never reaches the browser.
+  // The client POSTs the same request body it used to send directly; the key is added here.
+  if (req.url === '/api/anthropic' && req.method === 'POST') {
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Server is missing ANTHROPIC_API_KEY (set it in the server environment / .env).' } }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk;
+      if (body.length > 8 * 1024 * 1024) req.destroy();  // 8MB cap — base64 images
+    });
+    req.on('end', () => {
+      const payload = Buffer.from(body);
+      const upstream = https.request(
+        {
+          hostname: 'api.anthropic.com',
+          path: '/v1/messages',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': payload.length,
+            'x-api-key': key,
+            'anthropic-version': '2023-06-01',
+          },
+        },
+        upRes => {
+          res.writeHead(upRes.statusCode, { 'Content-Type': 'application/json' });
+          upRes.pipe(res);
+        }
+      );
+      upstream.on('error', e => {
+        console.error('[anthropic proxy]', e.message);
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Upstream request to Anthropic failed.' } }));
+      });
+      upstream.end(payload);
+    });
+    return;
+  }
+
   const urlPath  = req.url === '/' ? 'index.html' : req.url;
   const ext      = path.extname(urlPath);
   const contentType = types[ext] || 'text/plain';

@@ -322,7 +322,7 @@ function MealCard({ meal, onDelete }) {
 }
 
 // ─── Meal Entry Form ──────────────────────────────────────────────────────────
-function MealForm({ allMeals, onAdd, onCancel, apiKey, prefill = null, capturedImage = null, initError = '' }) {
+function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = null, initError = '' }) {
   const [name, setName] = useState(prefill?.name || '');
   const [protein, setProtein] = useState(prefill?.protein || '');
   const [carbs, setCarbs] = useState(prefill?.carbs || '');
@@ -374,17 +374,11 @@ function MealForm({ allMeals, onAdd, onCancel, apiKey, prefill = null, capturedI
 
   async function findMacros() {
     if (!name.trim()) { setError('Enter a meal name first.'); return; }
-    if (!apiKey) { setError('No API key set. Add your Anthropic API key in Settings.'); return; }
     setLoading(true); setError('');
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
+      const res = await fetch('/api/anthropic', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'claude-sonnet-4-6',
           max_tokens: 256,
@@ -511,7 +505,7 @@ function MealForm({ allMeals, onAdd, onCancel, apiKey, prefill = null, capturedI
 }
 
 // ─── Camera Capture ───────────────────────────────────────────────────────────
-function CameraCapture({ allMeals, onAdd, onCancel, apiKey }) {
+function CameraCapture({ allMeals, onAdd, onCancel }) {
   const [tab, setTab]             = useState('meal');
   const [mode, setMode]           = useState('camera');
   const [flash, setFlash]         = useState(false);
@@ -538,15 +532,14 @@ function CameraCapture({ allMeals, onAdd, onCancel, apiKey }) {
   }
 
   async function analyzeBase64(base64, mimeType) {
-    if (!apiKey) { setInitError('Add your Anthropic API key in Settings first.'); stopStream(); setMode('type'); return; }
     setMode('analyzing');
     try {
       const prompt = tab === 'label'
         ? 'This is a nutrition facts label. Use OCR to read all text on the label precisely. Find and extract these exact values per serving: Calories, Total Fat (g), Total Carbohydrate (g), Protein (g), and the serving size description. Reply ONLY with compact JSON, no other text: {"name":"product name","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"serving size from label"}'
         : 'Identify this food and estimate macros for the portion shown. Include local/Asian dishes accurately (laksa, nasi lemak, char kway teow, bak chor mee, roti prata, etc). Reply ONLY with compact JSON: {"name":"food name","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"portion description"}';
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
+      const res = await fetch('/api/anthropic', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'claude-haiku-4-5-20251001', max_tokens: 256,
           messages: [{ role: 'user', content: [
@@ -599,7 +592,7 @@ function CameraCapture({ allMeals, onAdd, onCancel, apiKey }) {
   }
 
   if (mode === 'confirm' || mode === 'type') {
-    return React.createElement(MealForm, { allMeals, onAdd, onCancel, apiKey, prefill: mode === 'confirm' ? prefill : null, capturedImage: mode === 'confirm' ? capturedImage : null, initError });
+    return React.createElement(MealForm, { allMeals, onAdd, onCancel, prefill: mode === 'confirm' ? prefill : null, capturedImage: mode === 'confirm' ? capturedImage : null, initError });
   }
 
   const isAnalyzing = mode === 'analyzing';
@@ -750,17 +743,7 @@ function LoginSheet({ onDismiss }) {
 }
 
 // ─── Settings Sheet ───────────────────────────────────────────────────────────
-function SettingsSheet({ user, apiKey, onSaveApiKey, goals, onGoalsChange, profile, onEditProfile, onSignIn, onSignOut, onClose }) {
-  const [keyVal, setKeyVal] = useState(apiKey || '');
-  const [showKey, setShowKey] = useState(false);
-  const [saved, setSaved]     = useState(false);
-
-  function handleSave() {
-    onSaveApiKey(keyVal.trim());
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  }
-
+function SettingsSheet({ user, goals, onGoalsChange, profile, onEditProfile, onSignIn, onSignOut, onClose }) {
   const avatar = user?.photoURL
     ? React.createElement('img', { src: user.photoURL, alt: '', style: { width: 44, height: 44, borderRadius: '50%', border: '2px solid white', boxShadow: '0 1px 4px rgba(0,0,0,.12)', flexShrink: 0 } })
     : React.createElement('div', { style: { width: 44, height: 44, borderRadius: '50%', background: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: '#16a34a', flexShrink: 0 } },
@@ -826,47 +809,16 @@ function SettingsSheet({ user, apiKey, onSaveApiKey, goals, onGoalsChange, profi
 
       // Daily Goals section
       React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 } }, 'Daily Goals'),
-      React.createElement('div', { style: { background: '#f9fafb', borderRadius: 16, padding: 16, marginBottom: 20 } },
+      React.createElement('div', { style: { background: '#f9fafb', borderRadius: 16, padding: 16 } },
         React.createElement('p', { style: { fontSize: 11, color: '#9ca3af', margin: '0 0 12px', lineHeight: 1.4 } }, 'Manual override — only changes your targets, existing meal history is never affected.'),
         React.createElement(GoalsEditor, { goals, onChange: onGoalsChange })
-      ),
-
-      // API Keys section
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 } }, 'API Keys'),
-      React.createElement('div', { style: { background: '#f9fafb', borderRadius: 16, padding: 16 } },
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 } },
-          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#374151' } }, 'Anthropic API Key'),
-          user && React.createElement('span', { style: { fontSize: 11, color: '#22c55e', fontWeight: 600 } }, '☁ saved to account')
-        ),
-        React.createElement('p', { style: { fontSize: 11, color: '#9ca3af', margin: '0 0 10px', lineHeight: 1.4 } },
-          user ? 'Stored securely in your account — no need to re-enter on new devices.' : 'Required for AI macro lookup. Sign in to save permanently.'
-        ),
-        React.createElement('div', { style: { display: 'flex', gap: 8 } },
-          React.createElement('div', { style: { position: 'relative', flex: 1 } },
-            React.createElement('input', {
-              type: showKey ? 'text' : 'password',
-              value: keyVal,
-              onChange: e => { setKeyVal(e.target.value); setSaved(false); },
-              placeholder: 'sk-ant-...',
-              style: { width: '100%', border: '1.5px solid #e5e7eb', borderRadius: 12, padding: '10px 36px 10px 12px', fontSize: 13, boxSizing: 'border-box', outline: 'none', fontFamily: 'monospace' }
-            }),
-            React.createElement('button', {
-              onClick: () => setShowKey(s => !s),
-              style: { position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#9ca3af' }
-            }, React.createElement(Icon, { name: showKey ? 'EyeOff' : 'Eye', size: 15 }))
-          ),
-          React.createElement('button', {
-            onClick: handleSave,
-            style: { background: saved ? '#22c55e' : '#111', color: 'white', border: 'none', borderRadius: 12, padding: '10px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }
-          }, saved ? '✓' : 'Save')
-        )
       )
     )
   );
 }
 
 // ─── Home Page ────────────────────────────────────────────────────────────────
-function HomePage({ meals, goals, onAddMeal, onDeleteMeal, selectedDate, onDateChange, apiKey, onOpenSettings }) {
+function HomePage({ meals, goals, onAddMeal, onDeleteMeal, selectedDate, onDateChange, onOpenSettings }) {
   const [showForm, setShowForm] = useState(false);
   const [justFed, setJustFed] = useState(false);
   const [evolveActive, setEvolveActive] = useState(false);
@@ -1031,8 +983,7 @@ function HomePage({ meals, goals, onAddMeal, onDeleteMeal, selectedDate, onDateC
       showForm && React.createElement(CameraCapture, {
         allMeals: meals,
         onAdd: meal => { handleMealAdd(meal); setShowForm(false); },
-        onCancel: () => setShowForm(false),
-        apiKey
+        onCancel: () => setShowForm(false)
       })
     )
   );
@@ -1319,7 +1270,6 @@ function App() {
   const [meals, setMeals]             = useState(() => storageGet(MEALS_KEY) || {});
   const [goals, setGoals]             = useState(() => storageGet(GOALS_KEY) || DEFAULT_GOALS);
   const [profile, setProfile]         = useState(() => storageGet(PROFILE_KEY) || null);
-  const [apiKey, setApiKey]           = useState(() => localStorage.getItem('macro-tracker-apikey') || '');
   const [showSettings, setShowSettings] = useState(false);
   const [showCamera, setShowCamera]   = useState(false);
   const [showLogin, setShowLogin]     = useState(false);
@@ -1331,7 +1281,7 @@ function App() {
   const latestRef        = useRef(null);
 
   // Keep latestRef always current — read inside the debounced save to avoid stale closures
-  useEffect(() => { latestRef.current = { meals, goals, profile, apiKey, user }; });
+  useEffect(() => { latestRef.current = { meals, goals, profile, user }; });
 
   // Firebase auth listener + handle redirect result from signInWithRedirect
   useEffect(() => {
@@ -1382,10 +1332,6 @@ function App() {
       const d = snap.data();
       if (d.goals) setGoals(d.goals);
       if (d.profile) { setProfile(d.profile); storageSet(PROFILE_KEY, d.profile); }
-      if (d.anthropicApiKey) {
-        setApiKey(d.anthropicApiKey);
-        localStorage.setItem('macro-tracker-apikey', d.anthropicApiKey);
-      }
       if (d.meals && Object.keys(d.meals).length > 0) {
         setMeals(d.meals);
         storageSet(MEALS_KEY, d.meals);
@@ -1396,10 +1342,10 @@ function App() {
   function scheduleFirestoreSave() {
     clearTimeout(firestoreSaveRef.current);
     firestoreSaveRef.current = setTimeout(async () => {
-      const { meals, goals, profile, apiKey, user: u } = latestRef.current || {};
+      const { meals, goals, profile, user: u } = latestRef.current || {};
       if (!u || !isFirebaseConfigured()) return;
       try {
-        await firebase.firestore().collection('users').doc(u.uid).set({ meals, goals, profile: profile || null, anthropicApiKey: apiKey });
+        await firebase.firestore().collection('users').doc(u.uid).set({ meals, goals, profile: profile || null });
       } catch(e) { console.error('[Firestore] Save failed:', e); }
     }, 1500);
   }
@@ -1408,7 +1354,6 @@ function App() {
   useEffect(() => { storageSet(MEALS_KEY, meals); scheduleFirestoreSave(); }, [meals]);
   useEffect(() => { storageSet(GOALS_KEY, goals); scheduleFirestoreSave(); }, [goals]);
   useEffect(() => { storageSet(PROFILE_KEY, profile); scheduleFirestoreSave(); }, [profile]);
-  useEffect(() => { localStorage.setItem('macro-tracker-apikey', apiKey); scheduleFirestoreSave(); }, [apiKey]);
 
   function addMeal(dateKey, meal) {
     setMeals(prev => ({ ...prev, [dateKey]: [...(prev[dateKey] || []), meal] }));
@@ -1450,7 +1395,7 @@ function App() {
       React.createElement('div', { className: 'flex-1 overflow-hidden' },
         page === 'home'
           ? React.createElement(HomePage, {
-              meals, goals, apiKey,
+              meals, goals,
               onAddMeal: addMeal,
               onDeleteMeal: deleteMeal,
               selectedDate,
@@ -1483,14 +1428,11 @@ function App() {
       showCamera && React.createElement(CameraCapture, {
         allMeals: meals,
         onAdd: meal => { addMeal(toDateKey(selectedDate), meal); setShowCamera(false); },
-        onCancel: () => setShowCamera(false),
-        apiKey
+        onCancel: () => setShowCamera(false)
       }),
 
       showSettings && React.createElement(SettingsSheet, {
         user,
-        apiKey,
-        onSaveApiKey: k => setApiKey(k),
         goals,
         onGoalsChange: g => setGoals(g),
         profile,
