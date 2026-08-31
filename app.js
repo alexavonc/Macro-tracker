@@ -3,6 +3,10 @@ const { useState, useEffect, useCallback, useRef } = React;
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 const MEALS_KEY = 'macro-tracker-meals';
 const GOALS_KEY = 'macro-tracker-goals';
+const PROFILE_KEY = 'macro-tracker-profile';
+// profile = { units:'metric'|'imperial', heightCm, weightKg, age, sex:'male'|'female',
+//             activity:'sedentary'|'light'|'moderate'|'active'|'veryActive',
+//             goalDir:'lose'|'maintain'|'gain' }  — null until onboarding (A3) completes
 
 function storageGet(key) {
   try {
@@ -63,6 +67,36 @@ function calcCals(protein, carbs, fat) {
 
 // ─── Default goals ────────────────────────────────────────────────────────────
 const DEFAULT_GOALS = { protein: 150, carbs: 200, fat: 65, calories: 2000 };
+
+// ─── Goal derivation — Mifflin-St Jeor → TDEE → macro split ───────────────────
+// Turns a body profile into { calories, protein, carbs, fat } targets.
+// Returns null if the profile is incomplete — caller keeps DEFAULT_GOALS / manual.
+const ACTIVITY_MULT = { sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725, veryActive: 1.9 };
+const GOAL_DELTA    = { lose: 0.80, maintain: 1.0, gain: 1.15 };  // multiplier on TDEE
+
+function bmrMifflin({ weightKg, heightCm, age, sex }) {
+  // 10·kg + 6.25·cm − 5·age + (male ? +5 : −161)
+  return 10 * weightKg + 6.25 * heightCm - 5 * age + (sex === 'male' ? 5 : -161);
+}
+
+function deriveGoals(profile) {
+  if (!profile) return null;
+  const { weightKg, heightCm, age, sex, activity, goalDir } = profile;
+  if (!(weightKg > 0 && heightCm > 0 && age > 0) || !sex || !activity || !goalDir) return null;
+
+  const bmr  = bmrMifflin(profile);
+  const tdee = bmr * (ACTIVITY_MULT[activity] || 1.2);
+  const calories = tdee * (GOAL_DELTA[goalDir] ?? 1.0);
+
+  // Protein: 1.8 g/kg (2.0 when cutting, to preserve lean mass).
+  const proteinG = Math.round((goalDir === 'lose' ? 2.0 : 1.8) * weightKg);
+  // Fat: 25% of calories, with a 0.8 g/kg floor so aggressive cuts stay healthy.
+  const fatG = Math.max(Math.round((0.25 * calories) / 9), Math.round(0.8 * weightKg));
+  // Carbs: whatever calories remain (clamped at 0 for extreme low-cal + high-protein cases).
+  const carbsG = Math.max(0, Math.round((calories - proteinG * 4 - fatG * 9) / 4));
+
+  return { calories: Math.round(calories / 10) * 10, protein: proteinG, carbs: carbsG, fat: fatG };
+}
 
 // ─── Pet system — sprite sheet ───────────────────────────────────────────────
 // Sheet: public/assets/cat-sprite.png  →  1536×1024, 7 cols × 4 rows = 28 frames
@@ -636,9 +670,9 @@ function GoalsEditor({ goals, onChange }) {
     { key: 'fat',      label: 'Fat',      unit: 'g' },
   ];
   return (
-    React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 4 } },
+    React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, marginTop: 4 } },
       fields.map(f =>
-        React.createElement('div', { key: f.key },
+        React.createElement('div', { key: f.key, style: { minWidth: 0 } },
           React.createElement('label', { style: { fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 5 } }, f.label),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', border: '1.5px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: 'white' } },
             React.createElement('input', {
@@ -716,7 +750,7 @@ function LoginSheet({ onDismiss }) {
 }
 
 // ─── Settings Sheet ───────────────────────────────────────────────────────────
-function SettingsSheet({ user, apiKey, onSaveApiKey, goals, onGoalsChange, onSignIn, onSignOut, onClose }) {
+function SettingsSheet({ user, apiKey, onSaveApiKey, goals, onGoalsChange, profile, onEditProfile, onSignIn, onSignOut, onClose }) {
   const [keyVal, setKeyVal] = useState(apiKey || '');
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved]     = useState(false);
@@ -773,10 +807,27 @@ function SettingsSheet({ user, apiKey, onSaveApiKey, goals, onGoalsChange, onSig
               React.createElement('p', { style: { fontSize: 12, color: '#9ca3af', margin: 0, lineHeight: 1.5 } }, 'Cloud sync not configured. Fill in firebase-config.js to enable Google sign-in.')
             ),
 
+      // Body Metrics section — opens the onboarding sheet in edit mode to re-derive goals
+      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 } }, 'Body Metrics'),
+      React.createElement('button', {
+        onClick: onEditProfile,
+        style: { width: '100%', background: '#f9fafb', border: '1.5px solid #e5e7eb', borderRadius: 16, padding: 14, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', textAlign: 'left' }
+      },
+        React.createElement('div', { style: { minWidth: 0 } },
+          React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: '#111' } }, profile ? 'Edit body metrics' : 'Set up your metrics'),
+          React.createElement('div', { style: { fontSize: 12, color: '#9ca3af', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            profile
+              ? `${Math.round(profile.weightKg)} kg · ${Math.round(profile.heightCm)} cm · ${profile.goalDir === 'lose' ? 'Losing' : profile.goalDir === 'gain' ? 'Gaining' : 'Maintaining'} — recalculates goals`
+              : 'Calculate your targets from height, weight & activity'
+          )
+        ),
+        React.createElement(Icon, { name: 'ChevronRight', size: 18, color: '#9ca3af' })
+      ),
+
       // Daily Goals section
       React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 } }, 'Daily Goals'),
       React.createElement('div', { style: { background: '#f9fafb', borderRadius: 16, padding: 16, marginBottom: 20 } },
-        React.createElement('p', { style: { fontSize: 11, color: '#9ca3af', margin: '0 0 12px', lineHeight: 1.4 } }, 'Only changes your targets — existing meal history is never affected.'),
+        React.createElement('p', { style: { fontSize: 11, color: '#9ca3af', margin: '0 0 12px', lineHeight: 1.4 } }, 'Manual override — only changes your targets, existing meal history is never affected.'),
         React.createElement(GoalsEditor, { goals, onChange: onGoalsChange })
       ),
 
@@ -1102,23 +1153,185 @@ function AnalyticsPage({ meals }) {
   );
 }
 
+// ─── Onboarding — collect body metrics, derive goals (Mifflin-St Jeor) ────────
+const ACTIVITY_OPTIONS = [
+  { key: 'sedentary',  label: 'Sedentary',   hint: 'Little or no exercise' },
+  { key: 'light',      label: 'Light',       hint: 'Exercise 1–3 days/week' },
+  { key: 'moderate',   label: 'Moderate',    hint: 'Exercise 3–5 days/week' },
+  { key: 'active',     label: 'Active',      hint: 'Exercise 6–7 days/week' },
+  { key: 'veryActive', label: 'Very active', hint: 'Hard daily training or physical job' },
+];
+const GOAL_OPTIONS = [
+  { key: 'lose',     label: 'Lose',     hint: '−20%' },
+  { key: 'maintain', label: 'Maintain', hint: 'at TDEE' },
+  { key: 'gain',     label: 'Gain',     hint: '+15%' },
+];
+
+function cmFromFtIn(ft, inch) { return (Number(ft || 0) * 12 + Number(inch || 0)) * 2.54; }
+function ftInFromCm(cm) { const t = Math.round(Number(cm || 0) / 2.54); return { ft: Math.floor(t / 12), in: t % 12 }; }
+function kgFromLbs(lbs) { return Number(lbs || 0) * 0.453592; }
+function lbsFromKg(kg) { return Math.round(Number(kg || 0) / 0.453592); }
+
+function OnboardingSheet({ onComplete, onSkip, onCancel, initialProfile = null, editMode = false }) {
+  const [step, setStep]   = useState('form');                       // 'form' | 'review'
+  const [units, setUnits] = useState(initialProfile?.units || 'metric');
+  const [age, setAge]     = useState(initialProfile?.age ? String(initialProfile.age) : '');
+  const [sex, setSex]     = useState(initialProfile?.sex || '');
+  const [cm, setCm]       = useState(initialProfile?.heightCm ? String(Math.round(initialProfile.heightCm)) : '');
+  const _fi = initialProfile?.heightCm ? ftInFromCm(initialProfile.heightCm) : { ft: '', in: '' };
+  const [ft, setFt]       = useState(_fi.ft === '' ? '' : String(_fi.ft));
+  const [inch, setInch]   = useState(_fi.in === '' ? '' : String(_fi.in));
+  const [kg, setKg]       = useState(initialProfile?.weightKg ? String(Math.round(initialProfile.weightKg)) : '');
+  const [lbs, setLbs]     = useState(initialProfile?.weightKg ? String(lbsFromKg(initialProfile.weightKg)) : '');
+  const [activity, setActivity] = useState(initialProfile?.activity || '');
+  const [goalDir, setGoalDir]   = useState(initialProfile?.goalDir || '');
+  const [error, setError] = useState('');
+  const [draftGoals, setDraftGoals] = useState(null);
+
+  const inp = { width: '100%', border: '1.5px solid #e5e7eb', borderRadius: 12, padding: '10px 12px', fontSize: 14, boxSizing: 'border-box', outline: 'none' };
+  const lbl = { fontSize: 11, color: '#9ca3af', display: 'block', marginBottom: 5, fontWeight: 600 };
+  const pill = (active) => ({ flex: 1, padding: '9px 8px', borderRadius: 12, border: '1.5px solid ' + (active ? '#22c55e' : '#e5e7eb'), background: active ? '#f0fdf4' : 'white', color: active ? '#16a34a' : '#374151', fontSize: 13, fontWeight: 700, cursor: 'pointer', textAlign: 'center' });
+
+  function buildProfile() {
+    const heightCm = units === 'metric' ? Number(cm) : cmFromFtIn(ft, inch);
+    const weightKg = units === 'metric' ? Number(kg) : kgFromLbs(lbs);
+    return { units, heightCm: Math.round(heightCm), weightKg: Math.round(weightKg), age: Number(age), sex, activity, goalDir };
+  }
+
+  function handleCalc() {
+    const heightOk = units === 'metric' ? Number(cm) > 0 : (Number(ft) > 0 || Number(inch) > 0);
+    const weightOk = units === 'metric' ? Number(kg) > 0 : Number(lbs) > 0;
+    if (!(Number(age) > 0) || !sex || !heightOk || !weightOk || !activity || !goalDir) {
+      setError('Please fill in every field.'); return;
+    }
+    const g = deriveGoals(buildProfile());
+    if (!g) { setError('Could not compute goals — check your inputs.'); return; }
+    setError(''); setDraftGoals(g); setStep('review');
+  }
+
+  // Full-page takeover (not a bottom sheet) — content column capped for readability on wide screens.
+  const page  = { position: 'fixed', inset: 0, zIndex: 70, background: '#f9fafb', overflowY: 'auto' };
+  const inner = { width: '100%', maxWidth: 480, minHeight: '100%', margin: '0 auto', boxSizing: 'border-box', padding: '56px 22px 40px', display: 'flex', flexDirection: 'column' };
+  // Edit mode (opened from Settings) gets a close control to back out without saving.
+  const cancelX = editMode && onCancel && React.createElement('button', { key: 'cancelX', onClick: onCancel, style: { position: 'absolute', top: 16, right: 16, background: '#f3f4f6', border: 'none', borderRadius: '50%', width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1 } }, React.createElement(Icon, { name: 'X', size: 18 }));
+
+  // ── Review step ──
+  if (step === 'review') {
+    return React.createElement('div', { style: page },
+      cancelX,
+      React.createElement('div', { style: inner },
+        React.createElement('h2', { style: { fontSize: 26, fontWeight: 900, color: '#111', margin: '0 0 8px' } }, 'Your daily targets'),
+        React.createElement('p', { style: { fontSize: 14, color: '#6b7280', margin: '0 0 20px', lineHeight: 1.5 } }, 'Calculated from your details with the Mifflin-St Jeor formula. Tweak anything before you start — you can always change it later in Settings.'),
+        React.createElement('div', { style: { background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 16, padding: '18px 18px', marginBottom: 18, display: 'flex', alignItems: 'baseline', gap: 6 } },
+          React.createElement('span', { style: { fontSize: 38, fontWeight: 900, color: '#16a34a' } }, (draftGoals?.calories || 0).toLocaleString()),
+          React.createElement('span', { style: { fontSize: 14, color: '#16a34a', fontWeight: 600 } }, 'kcal / day')
+        ),
+        React.createElement(GoalsEditor, { goals: draftGoals || {}, onChange: setDraftGoals }),
+        React.createElement('div', { style: { display: 'flex', gap: 10, marginTop: 'auto', paddingTop: 28 } },
+          React.createElement('button', { onClick: () => setStep('form'), style: { flex: 1, border: '1.5px solid #e5e7eb', borderRadius: 14, padding: '15px', fontSize: 15, fontWeight: 700, color: '#6b7280', background: 'white', cursor: 'pointer' } }, 'Back'),
+          React.createElement('button', { onClick: () => onComplete(buildProfile(), draftGoals), style: { flex: 2, border: 'none', borderRadius: 14, padding: '15px', fontSize: 15, fontWeight: 700, color: 'white', background: '#22c55e', cursor: 'pointer' } }, editMode ? 'Save' : 'Start tracking')
+        )
+      )
+    );
+  }
+
+  // ── Form step ──
+  const heightField = units === 'metric'
+    ? React.createElement('input', { type: 'number', inputMode: 'numeric', style: inp, placeholder: 'cm', value: cm, onChange: e => setCm(e.target.value) })
+    : React.createElement('div', { style: { display: 'flex', gap: 8 } },
+        React.createElement('input', { type: 'number', inputMode: 'numeric', style: inp, placeholder: 'ft', value: ft, onChange: e => setFt(e.target.value) }),
+        React.createElement('input', { type: 'number', inputMode: 'numeric', style: inp, placeholder: 'in', value: inch, onChange: e => setInch(e.target.value) })
+      );
+  const weightField = units === 'metric'
+    ? React.createElement('input', { type: 'number', inputMode: 'numeric', style: inp, placeholder: 'kg', value: kg, onChange: e => setKg(e.target.value) })
+    : React.createElement('input', { type: 'number', inputMode: 'numeric', style: inp, placeholder: 'lbs', value: lbs, onChange: e => setLbs(e.target.value) });
+
+  return React.createElement('div', { style: page },
+    cancelX,
+    React.createElement('div', { style: inner },
+      React.createElement('h2', { style: { fontSize: 26, fontWeight: 900, color: '#111', margin: '0 0 8px' } }, editMode ? 'Edit your metrics' : 'Set up your goals'),
+      React.createElement('p', { style: { fontSize: 14, color: '#6b7280', margin: '0 0 22px', lineHeight: 1.5 } }, 'A few details let MacroWorld calculate your daily calorie and macro targets.'),
+
+      // Units toggle
+      React.createElement('div', { style: { display: 'flex', background: '#f3f4f6', borderRadius: 12, padding: 3, marginBottom: 16 } },
+        ['metric', 'imperial'].map(u =>
+          React.createElement('button', { key: u, onClick: () => setUnits(u), style: { flex: 1, padding: '8px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 700, background: units === u ? 'white' : 'transparent', color: units === u ? '#111' : '#9ca3af', boxShadow: units === u ? '0 1px 3px rgba(0,0,0,.1)' : 'none' } }, u === 'metric' ? 'Metric' : 'Imperial')
+        )
+      ),
+
+      // Age + Sex
+      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 } },
+        React.createElement('div', null,
+          React.createElement('label', { style: lbl }, 'Age'),
+          React.createElement('input', { type: 'number', inputMode: 'numeric', style: inp, placeholder: 'years', value: age, onChange: e => setAge(e.target.value) })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { style: lbl }, 'Sex'),
+          React.createElement('div', { style: { display: 'flex', gap: 8 } },
+            React.createElement('button', { onClick: () => setSex('male'), style: pill(sex === 'male') }, 'Male'),
+            React.createElement('button', { onClick: () => setSex('female'), style: pill(sex === 'female') }, 'Female')
+          )
+        )
+      ),
+
+      // Height + Weight
+      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 } },
+        React.createElement('div', null, React.createElement('label', { style: lbl }, 'Height'), heightField),
+        React.createElement('div', null, React.createElement('label', { style: lbl }, 'Weight'), weightField)
+      ),
+
+      // Activity
+      React.createElement('label', { style: lbl }, 'Activity level'),
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 } },
+        ACTIVITY_OPTIONS.map(o =>
+          React.createElement('button', { key: o.key, onClick: () => setActivity(o.key),
+            style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 14px', borderRadius: 12, border: '1.5px solid ' + (activity === o.key ? '#22c55e' : '#e5e7eb'), background: activity === o.key ? '#f0fdf4' : 'white', cursor: 'pointer', textAlign: 'left' } },
+            React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: activity === o.key ? '#16a34a' : '#374151' } }, o.label),
+            React.createElement('span', { style: { fontSize: 11, color: '#9ca3af' } }, o.hint)
+          )
+        )
+      ),
+
+      // Goal direction
+      React.createElement('label', { style: lbl }, 'Goal'),
+      React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 8 } },
+        GOAL_OPTIONS.map(o =>
+          React.createElement('button', { key: o.key, onClick: () => setGoalDir(o.key), style: { ...pill(goalDir === o.key), display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 6px' } },
+            React.createElement('span', null, o.label),
+            React.createElement('span', { style: { fontSize: 10, color: goalDir === o.key ? '#16a34a' : '#9ca3af', fontWeight: 600 } }, o.hint)
+          )
+        )
+      ),
+
+      error && React.createElement('p', { style: { color: '#ef4444', fontSize: 12, margin: '16px 0 0', marginTop: 'auto' } }, error),
+
+      React.createElement('button', { onClick: handleCalc, style: { width: '100%', border: 'none', borderRadius: 14, padding: '16px', fontSize: 15, fontWeight: 700, color: 'white', background: '#22c55e', cursor: 'pointer', marginTop: error ? 12 : 'auto' } }, 'Calculate my goals'),
+
+      !editMode && onSkip && React.createElement('button', { onClick: onSkip, style: { width: '100%', background: 'none', border: 'none', padding: 12, fontSize: 13, color: '#9ca3af', cursor: 'pointer', marginTop: 4 } }, 'Set goals manually instead')
+    )
+  );
+}
+
 // ─── Root App ─────────────────────────────────────────────────────────────────
 function App() {
   const [page, setPage]               = useState('home');
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [meals, setMeals]             = useState(() => storageGet(MEALS_KEY) || {});
   const [goals, setGoals]             = useState(() => storageGet(GOALS_KEY) || DEFAULT_GOALS);
+  const [profile, setProfile]         = useState(() => storageGet(PROFILE_KEY) || null);
   const [apiKey, setApiKey]           = useState(() => localStorage.getItem('macro-tracker-apikey') || '');
   const [showSettings, setShowSettings] = useState(false);
   const [showCamera, setShowCamera]   = useState(false);
   const [showLogin, setShowLogin]     = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showProfileEdit, setShowProfileEdit] = useState(false);
   const [user, setUser]               = useState(null);
   const [authReady, setAuthReady]     = useState(!isFirebaseConfigured());
   const firestoreSaveRef = useRef(null);
   const latestRef        = useRef(null);
 
   // Keep latestRef always current — read inside the debounced save to avoid stale closures
-  useEffect(() => { latestRef.current = { meals, goals, apiKey, user }; });
+  useEffect(() => { latestRef.current = { meals, goals, profile, apiKey, user }; });
 
   // Firebase auth listener + handle redirect result from signInWithRedirect
   useEffect(() => {
@@ -1152,12 +1365,23 @@ function App() {
     }
   }, [authReady]);
 
+  // First-run onboarding — after auth resolves, once the login sheet is neither pending nor showing.
+  // Gate on a freshly derived `loginPending` (not the async `showLogin` state) so onboarding can't slip
+  // in during the same commit where the login effect is still scheduling setShowLogin(true). showLogin
+  // stays in deps only so dismissing the login sheet re-triggers this and lets onboarding follow.
+  useEffect(() => {
+    if (!authReady) return;
+    const loginPending = !user && isFirebaseConfigured() && !localStorage.getItem('login-dismissed');
+    if (!profile && !loginPending && !localStorage.getItem('onboarding-dismissed')) setShowOnboarding(true);
+  }, [authReady, profile, user, showLogin]);
+
   async function loadUserData(u) {
     try {
       const snap = await firebase.firestore().collection('users').doc(u.uid).get();
       if (!snap.exists) return;
       const d = snap.data();
       if (d.goals) setGoals(d.goals);
+      if (d.profile) { setProfile(d.profile); storageSet(PROFILE_KEY, d.profile); }
       if (d.anthropicApiKey) {
         setApiKey(d.anthropicApiKey);
         localStorage.setItem('macro-tracker-apikey', d.anthropicApiKey);
@@ -1172,10 +1396,10 @@ function App() {
   function scheduleFirestoreSave() {
     clearTimeout(firestoreSaveRef.current);
     firestoreSaveRef.current = setTimeout(async () => {
-      const { meals, goals, apiKey, user: u } = latestRef.current || {};
+      const { meals, goals, profile, apiKey, user: u } = latestRef.current || {};
       if (!u || !isFirebaseConfigured()) return;
       try {
-        await firebase.firestore().collection('users').doc(u.uid).set({ meals, goals, anthropicApiKey: apiKey });
+        await firebase.firestore().collection('users').doc(u.uid).set({ meals, goals, profile: profile || null, anthropicApiKey: apiKey });
       } catch(e) { console.error('[Firestore] Save failed:', e); }
     }, 1500);
   }
@@ -1183,6 +1407,7 @@ function App() {
   // Persist to localStorage; schedule Firestore save on any data change
   useEffect(() => { storageSet(MEALS_KEY, meals); scheduleFirestoreSave(); }, [meals]);
   useEffect(() => { storageSet(GOALS_KEY, goals); scheduleFirestoreSave(); }, [goals]);
+  useEffect(() => { storageSet(PROFILE_KEY, profile); scheduleFirestoreSave(); }, [profile]);
   useEffect(() => { localStorage.setItem('macro-tracker-apikey', apiKey); scheduleFirestoreSave(); }, [apiKey]);
 
   function addMeal(dateKey, meal) {
@@ -1268,6 +1493,8 @@ function App() {
         onSaveApiKey: k => setApiKey(k),
         goals,
         onGoalsChange: g => setGoals(g),
+        profile,
+        onEditProfile: () => { setShowSettings(false); setShowProfileEdit(true); },
         onSignIn: handleSignIn,
         onSignOut: handleSignOut,
         onClose: () => setShowSettings(false)
@@ -1275,6 +1502,18 @@ function App() {
 
       showLogin && React.createElement(LoginSheet, {
         onDismiss: () => { localStorage.setItem('login-dismissed', '1'); setShowLogin(false); }
+      }),
+
+      showOnboarding && React.createElement(OnboardingSheet, {
+        onComplete: (prof, g) => { setProfile(prof); setGoals(g); setShowOnboarding(false); },
+        onSkip: () => { localStorage.setItem('onboarding-dismissed', '1'); setShowOnboarding(false); }
+      }),
+
+      showProfileEdit && React.createElement(OnboardingSheet, {
+        editMode: true,
+        initialProfile: profile,
+        onComplete: (prof, g) => { setProfile(prof); setGoals(g); setShowProfileEdit(false); },
+        onCancel: () => setShowProfileEdit(false)
       })
     )
   );
