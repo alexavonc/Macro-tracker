@@ -371,6 +371,16 @@ function downscaleToSprite(pngDataUrl, size = 128) {
 
 // Generate a pixel-art sprite from the captured food photo via the server-side gpt-image-1 proxy.
 // Returns a small (64px) PNG data URL, or null on failure — callers save the meal either way.
+// Attach the signed-in user's Firebase ID token to a request, for the gated /api proxies.
+async function authedFetch(url, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  try {
+    const u = window.firebase && firebase.auth().currentUser;
+    if (u) headers['Authorization'] = 'Bearer ' + (await u.getIdToken());
+  } catch (e) { /* unauthenticated — the server will answer 401 */ }
+  return fetch(url, { ...opts, headers });
+}
+
 // Fast deterministic 64-bit hash of a string (an image's base64) — lets us recognize a
 // re-uploaded identical photo and reuse its saved macros + sprite instead of re-analysing.
 function hashImage(str) {
@@ -398,7 +408,7 @@ async function generatePixelSprite(photoDataUrl, foodName) {
     form.append('background', 'transparent');
     form.append('output_format', 'png');
     form.append('n', '1');
-    const res = await fetch('/api/openai-image', { method: 'POST', body: form });
+    const res = await authedFetch('/api/openai-image', { method: 'POST', body: form });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     const b64 = data.data?.[0]?.b64_json;
@@ -557,7 +567,7 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
     if (!name.trim()) { setError('Enter a meal name first.'); return; }
     setLoading(true); setError('');
     try {
-      const res = await fetch('/api/anthropic', {
+      const res = await authedFetch('/api/anthropic', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -744,7 +754,7 @@ function CameraCapture({ allMeals, onAdd, onCancel }) {
       const prompt = tab === 'label'
         ? 'This is a nutrition facts label. Use OCR to read all text on the label precisely. Find and extract these exact values per serving: Calories, Total Fat (g), Total Carbohydrate (g), Protein (g), and the serving size description. Reply ONLY with compact JSON, no other text: {"name":"product name","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"serving size from label"}'
         : 'Identify this food and estimate macros for the portion shown. Include local/Asian dishes accurately (laksa, nasi lemak, char kway teow, bak chor mee, roti prata, etc). Reply ONLY with compact JSON: {"name":"food name","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"portion description"}';
-      const res = await fetch('/api/anthropic', {
+      const res = await authedFetch('/api/anthropic', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1489,6 +1499,7 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showProfileEdit, setShowProfileEdit] = useState(false);
   const [user, setUser]               = useState(null);
+  const [authorized, setAuthorized]   = useState(null);   // null = checking · true · false
   const [authReady, setAuthReady]     = useState(!isFirebaseConfigured());
   const firestoreSaveRef = useRef(null);
   const latestRef        = useRef(null);
@@ -1594,10 +1605,52 @@ function App() {
     setShowSettings(false);
   }
 
+  // Verify the signed-in user against the server email allowlist.
+  useEffect(() => {
+    if (!user) { setAuthorized(null); return; }
+    let alive = true;
+    authedFetch('/api/authorize', { method: 'POST' })
+      .then(res => { if (alive) setAuthorized(res.ok); })
+      .catch(() => { if (alive) setAuthorized(false); });
+    return () => { alive = false; };
+  }, [user]);
+
   // Spinner while Firebase checks auth state
   if (!authReady) {
     return React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#f9fafb' } },
       React.createElement('div', { style: { width: 36, height: 36, borderRadius: '50%', border: '3px solid #e5e7eb', borderTopColor: '#22c55e', animation: 'spin 0.8s linear infinite' } })
+    );
+  }
+
+  const GATE_WRAP = { minHeight: '100vh', background: '#f0fdf4', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' };
+
+  // Must sign in with an allowed Google account to use the app.
+  if (!user) {
+    return React.createElement('div', { style: GATE_WRAP },
+      React.createElement('div', { style: { fontSize: 46, marginBottom: 10 } }, '🍔'),
+      React.createElement('h1', { style: { fontSize: 30, fontWeight: 900, color: '#111', margin: '0 0 6px', letterSpacing: '-0.02em' } }, 'MacroWorld'),
+      React.createElement('p', { style: { fontSize: 14, color: '#6b7280', margin: '0 0 28px', maxWidth: 300, lineHeight: 1.5 } }, 'Sign in to track your macros and feed your pet.'),
+      React.createElement('button', { onClick: handleSignIn, style: { display: 'flex', alignItems: 'center', gap: 10, background: 'white', border: '1.5px solid #e5e7eb', borderRadius: 14, padding: '13px 22px', fontSize: 15, fontWeight: 600, color: '#374151', cursor: 'pointer', boxShadow: '0 1px 4px rgba(0,0,0,.1)' } },
+        React.createElement(GoogleIcon), 'Continue with Google'
+      )
+    );
+  }
+
+  // Signed in, waiting on the allowlist check.
+  if (authorized === null) {
+    return React.createElement('div', { style: GATE_WRAP },
+      React.createElement('div', { style: { width: 36, height: 36, borderRadius: '50%', border: '3px solid #e5e7eb', borderTopColor: '#22c55e', animation: 'spin 0.8s linear infinite' } }),
+      React.createElement('p', { style: { fontSize: 13, color: '#9ca3af', marginTop: 14 } }, 'Checking access…')
+    );
+  }
+
+  // Signed in but not on the allowlist — access denied.
+  if (authorized === false) {
+    return React.createElement('div', { style: GATE_WRAP },
+      React.createElement('div', { style: { fontSize: 42, marginBottom: 10 } }, '⛔'),
+      React.createElement('h1', { style: { fontSize: 23, fontWeight: 800, color: '#b91c1c', margin: '0 0 8px' } }, 'Access not allowed'),
+      React.createElement('p', { style: { fontSize: 14, color: '#6b7280', margin: '0 0 26px', maxWidth: 320, lineHeight: 1.5 } }, (user.email || 'This account') + ' doesn’t have access to MacroWorld.'),
+      React.createElement('button', { onClick: handleSignOut, style: { background: '#f3f4f6', border: 'none', borderRadius: 12, padding: '11px 22px', fontSize: 14, fontWeight: 600, color: '#374151', cursor: 'pointer' } }, 'Sign out')
     );
   }
 
