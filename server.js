@@ -142,7 +142,7 @@ http.createServer((req, res) => {
     fs.readFile(list[0], (err, data) => {
       if (err) { tryNext(list.slice(1)); return; }
       const ct = list[0].endsWith('index.html') ? 'text/html' : contentType;
-      res.writeHead(200, { 'Content-Type': ct });
+      res.writeHead(200, { 'Content-Type': ct, 'Cache-Control': 'no-cache' });
       res.end(data);
     });
   };

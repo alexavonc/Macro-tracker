@@ -371,6 +371,20 @@ function downscaleToSprite(pngDataUrl, size = 128) {
 
 // Generate a pixel-art sprite from the captured food photo via the server-side gpt-image-1 proxy.
 // Returns a small (64px) PNG data URL, or null on failure — callers save the meal either way.
+// Fast deterministic 64-bit hash of a string (an image's base64) — lets us recognize a
+// re-uploaded identical photo and reuse its saved macros + sprite instead of re-analysing.
+function hashImage(str) {
+  let h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+}
+
 async function generatePixelSprite(photoDataUrl, foodName) {
   try {
     const blob = await (await fetch(photoDataUrl)).blob();
@@ -444,14 +458,12 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
 
   // Timed phase transitions.
   useEffect(() => {
-    if (phase === 'flip')  { const t = setTimeout(() => setPhase('bites'), 900);  return () => clearTimeout(t); }
-    if (phase === 'bites') { const t = setTimeout(() => setPhase('done'), 1200);  return () => clearTimeout(t); }
-    if (phase === 'done')  { const t = setTimeout(() => onDone(spriteRef.current ? spriteRef.current.thumb : null), 950); return () => clearTimeout(t); }
+    if (phase === 'flip') { const t = setTimeout(() => setPhase('done'), 1500); return () => clearTimeout(t); }
+    if (phase === 'done') { const t = setTimeout(() => onDone(spriteRef.current ? spriteRef.current.thumb : null), 950); return () => clearTimeout(t); }
   }, [phase]);
 
   const BOX = 260, R = 122, SW = 3, CX = 130, CY = 130, C = 2 * Math.PI * R;
-  const flipped   = phase !== 'progress';
-  const showBites = phase === 'bites' || phase === 'done';
+  const flipped = phase !== 'progress';
 
   const ticks = [];
   for (let k = 0; k < 12; k++) {
@@ -463,12 +475,9 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
       stroke: pct >= (k / 12) ? '#22c55e' : '#e5e7eb', strokeWidth: 2, strokeLinecap: 'round'
     }));
   }
-  const bites = [{ top: '4%', left: '56%' }, { top: '60%', left: '6%' }, { top: '68%', left: '64%' }];
-
   return React.createElement('div', {
     style: { position: 'fixed', inset: 0, zIndex: 80, background: '#ffffff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 26 }
   },
-    React.createElement('style', null, '@keyframes dgBite { 0%{transform:scale(0)} 60%{transform:scale(1.15)} 100%{transform:scale(1)} }'),
     React.createElement('div', { style: { position: 'relative', width: BOX, height: BOX, perspective: 900 } },
       React.createElement('svg', { width: BOX, height: BOX, style: { position: 'absolute', inset: 0, transform: 'rotate(-90deg)' } },
         React.createElement('circle', { cx: CX, cy: CY, r: R, fill: 'none', stroke: '#eef2f4', strokeWidth: SW }),
@@ -482,10 +491,7 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
           React.createElement('img', { src: photo, alt: '', style: { width: '100%', height: '100%', objectFit: 'cover' } })
         ),
         React.createElement('div', { style: { position: 'absolute', inset: 0, borderRadius: '50%', backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', transform: 'rotateY(180deg)', background: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' } },
-          sprite && React.createElement('img', { src: sprite.full, alt: '', style: { width: '80%', height: '80%', objectFit: 'contain' } }),
-          showBites && bites.map((p, i) =>
-            React.createElement('div', { key: i, style: { position: 'absolute', top: p.top, left: p.left, width: 54, height: 54, borderRadius: '50%', background: '#ffffff', transform: 'scale(0)', animation: `dgBite 0.4s ease ${0.05 + i * 0.22}s forwards` } })
-          )
+          sprite && React.createElement('img', { src: sprite.full, alt: '', style: { width: '80%', height: '80%', objectFit: 'contain' } })
         )
       )
     ),
@@ -590,8 +596,12 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
     // Manual entry (no photo) — nothing to digest, add straight away.
     if (!capturedImage) { onAdd(base); return; }
 
-    // Reuse a cached sprite for the same dish (name match) so a repeat doesn't re-generate.
-    const prior = mealHistory().find(m => m.sprite && m.name.toLowerCase() === nm.toLowerCase());
+    // Tag the meal with its image hash so a re-upload of this exact photo reuses everything.
+    const h = hashImage(capturedImage.split(',')[1] || capturedImage);
+    base.imageHash = h;
+
+    // Reuse a cached sprite: same image first (exact), else same dish name — so a repeat doesn't re-generate.
+    const prior = mealHistory().find(m => m.sprite && (m.imageHash === h || m.name.toLowerCase() === nm.toLowerCase()));
     // Hand off to the full-screen digest animation; it generates (or reuses) then adds the meal via onDone.
     setDigest({ base, photo: capturedImage, foodName: nm, cachedSprite: prior?.sprite || null });
   }
@@ -723,6 +733,13 @@ function CameraCapture({ allMeals, onAdd, onCancel }) {
 
   async function analyzeBase64(base64, mimeType) {
     setMode('analyzing');
+    // Seen this exact photo before? Reuse its saved macros — no re-analysis, identical every time.
+    const cached = Object.values(allMeals).flat().find(m => m.imageHash && m.imageHash === hashImage(base64));
+    if (cached) {
+      setPrefill({ name: cached.name, protein: String(cached.protein), carbs: String(cached.carbs), fat: String(cached.fat), calories: String(cached.calories || calcCals(cached.protein, cached.carbs, cached.fat)), serving: cached.serving || '' });
+      setMode('confirm');
+      return;
+    }
     try {
       const prompt = tab === 'label'
         ? 'This is a nutrition facts label. Use OCR to read all text on the label precisely. Find and extract these exact values per serving: Calories, Total Fat (g), Total Carbohydrate (g), Protein (g), and the serving size description. Reply ONLY with compact JSON, no other text: {"name":"product name","protein":0,"carbs":0,"fat":0,"calories":0,"serving":"serving size from label"}'
@@ -1180,7 +1197,7 @@ function HomePage({ meals, goals, onAddMeal, onDeleteMeal, selectedDate, onDateC
 }
 
 // ─── Analytics Page ───────────────────────────────────────────────────────────
-function AnalyticsPage({ meals }) {
+function AnalyticsPage({ meals, goals }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(today(), -(6 - i)));
 
   const dayData = days.map(d => {
@@ -1196,6 +1213,9 @@ function AnalyticsPage({ meals }) {
   });
 
   const maxCals = Math.max(...dayData.map(d => d.calories), 1);
+  const goalCals = goals ? (goals.calories || (goals.protein * 4 + goals.carbs * 4 + goals.fat * 9)) : 0;
+  // Scale bars against the taller of the week's peak or the daily goal, so an over-goal day reads as tall.
+  const scaleMax = Math.max(maxCals, goalCals, 1);
   const avg = (key) => {
     const vals = dayData.map(d => d[key]);
     return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
@@ -1218,13 +1238,16 @@ function AnalyticsPage({ meals }) {
           React.createElement('div', { className: 'text-sm font-semibold text-gray-700 mb-4' }, 'Daily Calories'),
           React.createElement('div', { className: 'flex items-end gap-2 h-32' },
             dayData.map((d, i) => {
-              const h = maxCals > 0 ? Math.max((d.calories / maxCals) * 100, d.calories > 0 ? 8 : 2) : 2;
               const isT = isSameDay(d.date, today());
+              const over = goalCals > 0 && d.calories > goalCals;
+              // Pixel height (not %) so it renders regardless of the flex parent's resolved height.
+              const barPx = d.calories > 0 ? Math.max(Math.round((d.calories / scaleMax) * 90), 6) : 3;
+              const barBg = over ? '#ef4444' : (isT ? '#22c55e' : '#d1fae5');
               return React.createElement('div', { key: d.key, className: 'flex-1 flex flex-col items-center gap-1' },
-                d.calories > 0 && React.createElement('div', { className: 'text-xs text-gray-400', style: { fontSize: 9 } }, Math.round(d.calories)),
+                d.calories > 0 && React.createElement('div', { className: 'text-xs', style: { fontSize: 9, color: over ? '#ef4444' : '#9ca3af', fontWeight: over ? 700 : 400 } }, Math.round(d.calories)),
                 React.createElement('div', {
                   className: 'w-full rounded-t-lg transition-all',
-                  style: { height: `${h}%`, backgroundColor: isT ? '#22c55e' : '#d1fae5' }
+                  style: { height: `${barPx}px`, backgroundColor: barBg }
                 }),
                 React.createElement('div', { className: `text-xs ${isT ? 'font-bold text-green-600' : 'text-gray-400'}` },
                   d.date.toLocaleDateString('en-US', { weekday: 'short' }).charAt(0)
@@ -1592,7 +1615,7 @@ function App() {
               onDateChange: setSelectedDate,
               onOpenSettings: () => setShowSettings(true),
             })
-          : React.createElement(AnalyticsPage, { meals })
+          : React.createElement(AnalyticsPage, { meals, goals })
       ),
 
       // Bottom nav
@@ -1626,7 +1649,7 @@ function App() {
         goals,
         onGoalsChange: g => setGoals(g),
         profile,
-        onEditProfile: () => { setShowSettings(false); setShowProfileEdit(true); },
+        onEditProfile: () => setShowProfileEdit(true),
         onSignIn: handleSignIn,
         onSignOut: handleSignOut,
         onClose: () => setShowSettings(false)
