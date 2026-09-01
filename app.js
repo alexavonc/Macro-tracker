@@ -349,14 +349,17 @@ Clean, minimal, readable pixel icon`;
 
 // Downscale a PNG data URL to size×size with nearest-neighbor — gives the crisp pixel look
 // and keeps the stored sprite tiny (a 64px PNG is a few KB, safe to persist with the meal).
-function downscaleToSprite(pngDataUrl, size = 64) {
+function downscaleToSprite(pngDataUrl, size = 128) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width = size; canvas.height = size;
       const ctx = canvas.getContext('2d');
-      ctx.imageSmoothingEnabled = false;
+      // Smoothing ON for downscaling — area-averaging avoids the aliasing that
+      // nearest-neighbor produces when shrinking a 1024px source.
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.clearRect(0, 0, size, size);
       ctx.drawImage(img, 0, 0, size, size);
       resolve(canvas.toDataURL('image/png'));
@@ -373,7 +376,7 @@ async function generatePixelSprite(photoDataUrl, foodName) {
     const blob = await (await fetch(photoDataUrl)).blob();
     const ext = blob.type === 'image/png' ? 'png' : 'jpg';
     const form = new FormData();
-    form.append('model', 'gpt-image-1');
+    form.append('model', 'gpt-image-1-mini');
     form.append('image', blob, `food.${ext}`);
     form.append('prompt', `${PIXEL_SPRITE_PROMPT}\nThe food item is: ${foodName || 'a meal'}.`);
     form.append('size', '1024x1024');
@@ -386,11 +389,111 @@ async function generatePixelSprite(photoDataUrl, foodName) {
     const data = await res.json();
     const b64 = data.data?.[0]?.b64_json;
     if (!b64) throw new Error('No image returned');
-    return await downscaleToSprite(`data:image/png;base64,${b64}`, 64);
+    const full = `data:image/png;base64,${b64}`;          // high-res, shown on the digest flip
+    const thumb = await downscaleToSprite(full, 128);      // small, stored on the meal for the card
+    return { full, thumb };
   } catch (e) {
     console.error('[pixel sprite]', e);
     return null;
   }
+}
+
+// ─── Digest overlay — full-screen "digesting" sequence for a scanned meal ──────
+// progress ring (clockwise from 12, fills while the sprite generates) -> coin-flip
+// from photo to pixel sprite -> bites taken out -> "Digested!" -> auto-close.
+// onDone(sprite|null) fires at the end; the caller adds the meal there.
+function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
+  const [pct, setPct]       = useState(0);
+  const [phase, setPhase]   = useState('progress');  // progress | flip | bites | done
+  const [sprite, setSprite] = useState(null);
+  const spriteRef   = useRef(null);
+  const resolvedRef = useRef(false);
+
+  // Kick off generation (or cached reuse) once.
+  useEffect(() => {
+    let alive = true;
+    Promise.resolve().then(makeSprite)
+      .then(s => { if (alive) { spriteRef.current = s || null; setSprite(s || null); } })
+      .catch(() => { if (alive) { spriteRef.current = null; setSprite(null); } })
+      .finally(() => { if (alive) resolvedRef.current = true; });
+    return () => { alive = false; };
+  }, []);
+
+  // Ring fill: ease toward 0.9 while the sprite is pending, then snap to 1 once resolved.
+  useEffect(() => {
+    if (phase !== 'progress') return;
+    let raf;
+    const loop = () => {
+      setPct(prev => {
+        const ceiling = resolvedRef.current ? 1 : 0.9;
+        const next = prev + (ceiling - prev) * 0.045;
+        return next > 0.999 ? 1 : next;
+      });
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [phase]);
+
+  // Advance out of progress once the ring is full and the sprite has resolved.
+  useEffect(() => {
+    if (phase === 'progress' && resolvedRef.current && pct >= 1) {
+      setPhase(spriteRef.current ? 'flip' : 'done');
+    }
+  }, [pct, phase]);
+
+  // Timed phase transitions.
+  useEffect(() => {
+    if (phase === 'flip')  { const t = setTimeout(() => setPhase('bites'), 900);  return () => clearTimeout(t); }
+    if (phase === 'bites') { const t = setTimeout(() => setPhase('done'), 1200);  return () => clearTimeout(t); }
+    if (phase === 'done')  { const t = setTimeout(() => onDone(spriteRef.current ? spriteRef.current.thumb : null), 950); return () => clearTimeout(t); }
+  }, [phase]);
+
+  const BOX = 260, R = 122, SW = 3, CX = 130, CY = 130, C = 2 * Math.PI * R;
+  const flipped   = phase !== 'progress';
+  const showBites = phase === 'bites' || phase === 'done';
+
+  const ticks = [];
+  for (let k = 0; k < 12; k++) {
+    const a = (k * 30 - 90) * Math.PI / 180;
+    ticks.push(React.createElement('line', {
+      key: k,
+      x1: CX + (R - 7) * Math.cos(a), y1: CY + (R - 7) * Math.sin(a),
+      x2: CX + (R + 1) * Math.cos(a), y2: CY + (R + 1) * Math.sin(a),
+      stroke: pct >= (k / 12) ? '#22c55e' : '#e5e7eb', strokeWidth: 2, strokeLinecap: 'round'
+    }));
+  }
+  const bites = [{ top: '4%', left: '56%' }, { top: '60%', left: '6%' }, { top: '68%', left: '64%' }];
+
+  return React.createElement('div', {
+    style: { position: 'fixed', inset: 0, zIndex: 80, background: '#ffffff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 26 }
+  },
+    React.createElement('style', null, '@keyframes dgBite { 0%{transform:scale(0)} 60%{transform:scale(1.15)} 100%{transform:scale(1)} }'),
+    React.createElement('div', { style: { position: 'relative', width: BOX, height: BOX, perspective: 900 } },
+      React.createElement('svg', { width: BOX, height: BOX, style: { position: 'absolute', inset: 0, transform: 'rotate(-90deg)' } },
+        React.createElement('circle', { cx: CX, cy: CY, r: R, fill: 'none', stroke: '#eef2f4', strokeWidth: SW }),
+        React.createElement('circle', { cx: CX, cy: CY, r: R, fill: 'none', stroke: '#22c55e', strokeWidth: SW, strokeLinecap: 'round', strokeDasharray: C, strokeDashoffset: C * (1 - Math.min(pct, 1)) })
+      ),
+      React.createElement('svg', { width: BOX, height: BOX, style: { position: 'absolute', inset: 0 } }, ticks),
+      React.createElement('div', {
+        style: { position: 'absolute', inset: 26, borderRadius: '50%', transformStyle: 'preserve-3d', WebkitTransformStyle: 'preserve-3d', transition: 'transform 0.85s cubic-bezier(.4,.1,.2,1)', transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }
+      },
+        React.createElement('div', { style: { position: 'absolute', inset: 0, borderRadius: '50%', overflow: 'hidden', backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', border: '3px solid #f3f4f6' } },
+          React.createElement('img', { src: photo, alt: '', style: { width: '100%', height: '100%', objectFit: 'cover' } })
+        ),
+        React.createElement('div', { style: { position: 'absolute', inset: 0, borderRadius: '50%', backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', transform: 'rotateY(180deg)', background: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' } },
+          sprite && React.createElement('img', { src: sprite.full, alt: '', style: { width: '80%', height: '80%', objectFit: 'contain' } }),
+          showBites && bites.map((p, i) =>
+            React.createElement('div', { key: i, style: { position: 'absolute', top: p.top, left: p.left, width: 54, height: 54, borderRadius: '50%', background: '#ffffff', transform: 'scale(0)', animation: `dgBite 0.4s ease ${0.05 + i * 0.22}s forwards` } })
+          )
+        )
+      )
+    ),
+    React.createElement('div', { style: { textAlign: 'center' } },
+      React.createElement('div', { style: { fontSize: 22, fontWeight: 900, color: phase === 'done' ? '#16a34a' : '#111' } }, phase === 'done' ? 'Digested!' : 'Digesting…'),
+      React.createElement('div', { style: { fontSize: 13, color: '#9ca3af', marginTop: 4 } }, foodName || '')
+    )
+  );
 }
 
 function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = null, initError = '' }) {
@@ -404,7 +507,7 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
   const [error, setError] = useState(initError);
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [digesting, setDigesting] = useState(false);
+  const [digest, setDigest] = useState(null);
 
   // Build a deduplicated history of past meals for search
   const mealHistory = useCallback(() => {
@@ -477,27 +580,29 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
     } finally { setLoading(false); }
   }
 
-  async function handleSubmit() {
+  function handleSubmit() {
     if (!name.trim()) { setError('Enter a meal name.'); return; }
     const p = Number(protein) || 0, c = Number(carbs) || 0, f = Number(fat) || 0;
     const cals = Number(calories) || calcCals(p, c, f);
     const nm = name.trim();
     const base = { id: Date.now(), name: nm, protein: p, carbs: c, fat: f, calories: cals, serving };
 
-    // Reuse a cached sprite for the same dish (name match) before spending on a new generation.
-    const prior = mealHistory().find(m => m.sprite && m.name.toLowerCase() === nm.toLowerCase());
-    if (prior?.sprite) { onAdd({ ...base, sprite: prior.sprite }); return; }
-
-    // Only photo-scanned meals get a pixel digest; a manual entry has no photo to stylize.
+    // Manual entry (no photo) — nothing to digest, add straight away.
     if (!capturedImage) { onAdd(base); return; }
 
-    setDigesting(true);
-    const sprite = await generatePixelSprite(capturedImage, nm);
-    setDigesting(false);
-    onAdd(sprite ? { ...base, sprite } : base);
+    // Reuse a cached sprite for the same dish (name match) so a repeat doesn't re-generate.
+    const prior = mealHistory().find(m => m.sprite && m.name.toLowerCase() === nm.toLowerCase());
+    // Hand off to the full-screen digest animation; it generates (or reuses) then adds the meal via onDone.
+    setDigest({ base, photo: capturedImage, foodName: nm, cachedSprite: prior?.sprite || null });
   }
 
-  return (
+  return React.createElement(React.Fragment, null,
+    digest && React.createElement(DigestOverlay, {
+      photo: digest.photo,
+      foodName: digest.foodName,
+      makeSprite: () => digest.cachedSprite ? Promise.resolve({ full: digest.cachedSprite, thumb: digest.cachedSprite }) : generatePixelSprite(digest.photo, digest.foodName),
+      onDone: sprite => onAdd(sprite ? { ...digest.base, sprite } : digest.base)
+    }),
     React.createElement('div', { className: 'fixed inset-0 z-50 flex items-end justify-center' },
       React.createElement('div', { className: 'absolute inset-0 bg-black/40', onClick: onCancel }),
       React.createElement('div', { className: 'relative bg-white rounded-t-3xl w-full max-w-lg p-6 pb-10 shadow-2xl' },
@@ -581,9 +686,8 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
           }, 'Cancel'),
           React.createElement('button', {
             onClick: handleSubmit,
-            disabled: digesting,
-            className: 'flex-1 bg-green-500 hover:bg-green-600 disabled:bg-green-300 text-white rounded-xl py-3 text-sm font-semibold transition-colors'
-          }, digesting ? 'Digesting…' : 'Add Meal')
+            className: 'flex-1 bg-green-500 hover:bg-green-600 text-white rounded-xl py-3 text-sm font-semibold transition-colors'
+          }, 'Add Meal')
         )
       )
     )
