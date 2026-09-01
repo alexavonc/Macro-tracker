@@ -81,6 +81,51 @@ http.createServer((req, res) => {
     return;
   }
 
+  // Proxy OpenAI image edits (gpt-image-1) server-side so that key never reaches the browser.
+  // The client sends a multipart/form-data body (food photo + prompt + params); we forward it
+  // verbatim to /v1/images/edits and only add the Authorization header.
+  if (req.url === '/api/openai-image' && req.method === 'POST') {
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Server is missing OPENAI_API_KEY (set it in the server environment / .env).' } }));
+      return;
+    }
+    const chunks = [];
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > 25 * 1024 * 1024) { req.destroy(); return; }  // 25MB cap
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      const payload = Buffer.concat(chunks);
+      const upstream = https.request(
+        {
+          hostname: 'api.openai.com',
+          path: '/v1/images/edits',
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${key}`,
+            'Content-Type': req.headers['content-type'],  // preserve multipart boundary
+            'Content-Length': payload.length,
+          },
+        },
+        upRes => {
+          res.writeHead(upRes.statusCode, { 'Content-Type': 'application/json' });
+          upRes.pipe(res);
+        }
+      );
+      upstream.on('error', e => {
+        console.error('[openai image proxy]', e.message);
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Upstream request to OpenAI failed.' } }));
+      });
+      upstream.end(payload);
+    });
+    return;
+  }
+
   const urlPath  = req.url === '/' ? 'index.html' : req.url;
   const ext      = path.extname(urlPath);
   const contentType = types[ext] || 'text/plain';

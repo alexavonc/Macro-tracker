@@ -301,7 +301,9 @@ function MealCard({ meal, onDelete }) {
   const cals = meal.calories || calcCals(meal.protein, meal.carbs, meal.fat);
   return (
     React.createElement('div', { className: 'flex items-center justify-between py-3 border-b border-gray-50 last:border-0' },
-      React.createElement('div', { className: 'flex-1 min-w-0' },
+      React.createElement('div', { className: 'flex items-center gap-3 flex-1 min-w-0' },
+        meal.sprite && React.createElement('img', { src: meal.sprite, alt: '', style: { width: 40, height: 40, borderRadius: 8, imageRendering: 'pixelated', flexShrink: 0, background: '#f9fafb', objectFit: 'contain' } }),
+        React.createElement('div', { className: 'min-w-0' },
         React.createElement('div', { className: 'font-medium text-gray-800 text-sm truncate' }, meal.name),
         meal.serving && React.createElement('div', { className: 'text-xs text-gray-400 mt-0.5' }, meal.serving),
         React.createElement('div', { className: 'flex gap-3 mt-1 text-xs text-gray-500' },
@@ -309,7 +311,7 @@ function MealCard({ meal, onDelete }) {
           React.createElement('span', null, `C: ${meal.carbs}g`),
           React.createElement('span', null, `F: ${meal.fat}g`)
         )
-      ),
+      )),
       React.createElement('div', { className: 'flex items-center gap-3 ml-2' },
         React.createElement('span', { className: 'text-sm font-semibold text-gray-700' }, `${cals} kcal`),
         React.createElement('button', {
@@ -322,6 +324,75 @@ function MealCard({ meal, onDelete }) {
 }
 
 // ─── Meal Entry Form ──────────────────────────────────────────────────────────
+// ─── Pixel-art "digest" sprite ────────────────────────────────────────────────
+// Proven gpt-image-1 style prompt; the identified food name is appended per call.
+const PIXEL_SPRITE_PROMPT = `Convert this food item into a low-fidelity pixel art game icon.
+STYLE RULES:
+32x32 or 64x64 pixel art style
+Very limited color palette (max 12 colors)
+Flat shading (1-2 shades per color)
+No gradients
+No texture noise
+Clean chunky pixels
+Strong simple silhouette
+Centered composition
+Transparent background
+DO NOT:
+Add realism or fine detail
+Add text or labels
+Add lighting effects or soft shadows
+REFERENCE STYLE:
+Retro game item icon (Stardew Valley / Pokemon)
+Similar fidelity to simple pixel food icons
+OUTPUT:
+Clean, minimal, readable pixel icon`;
+
+// Downscale a PNG data URL to size×size with nearest-neighbor — gives the crisp pixel look
+// and keeps the stored sprite tiny (a 64px PNG is a few KB, safe to persist with the meal).
+function downscaleToSprite(pngDataUrl, size = 64) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, size, size);
+      ctx.drawImage(img, 0, 0, size, size);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = reject;
+    img.src = pngDataUrl;
+  });
+}
+
+// Generate a pixel-art sprite from the captured food photo via the server-side gpt-image-1 proxy.
+// Returns a small (64px) PNG data URL, or null on failure — callers save the meal either way.
+async function generatePixelSprite(photoDataUrl, foodName) {
+  try {
+    const blob = await (await fetch(photoDataUrl)).blob();
+    const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+    const form = new FormData();
+    form.append('model', 'gpt-image-1');
+    form.append('image', blob, `food.${ext}`);
+    form.append('prompt', `${PIXEL_SPRITE_PROMPT}\nThe food item is: ${foodName || 'a meal'}.`);
+    form.append('size', '1024x1024');
+    form.append('quality', 'low');
+    form.append('background', 'transparent');
+    form.append('output_format', 'png');
+    form.append('n', '1');
+    const res = await fetch('/api/openai-image', { method: 'POST', body: form });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    const b64 = data.data?.[0]?.b64_json;
+    if (!b64) throw new Error('No image returned');
+    return await downscaleToSprite(`data:image/png;base64,${b64}`, 64);
+  } catch (e) {
+    console.error('[pixel sprite]', e);
+    return null;
+  }
+}
+
 function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = null, initError = '' }) {
   const [name, setName] = useState(prefill?.name || '');
   const [protein, setProtein] = useState(prefill?.protein || '');
@@ -333,6 +404,7 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
   const [error, setError] = useState(initError);
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [digesting, setDigesting] = useState(false);
 
   // Build a deduplicated history of past meals for search
   const mealHistory = useCallback(() => {
@@ -405,11 +477,24 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
     } finally { setLoading(false); }
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!name.trim()) { setError('Enter a meal name.'); return; }
     const p = Number(protein) || 0, c = Number(carbs) || 0, f = Number(fat) || 0;
     const cals = Number(calories) || calcCals(p, c, f);
-    onAdd({ id: Date.now(), name: name.trim(), protein: p, carbs: c, fat: f, calories: cals, serving });
+    const nm = name.trim();
+    const base = { id: Date.now(), name: nm, protein: p, carbs: c, fat: f, calories: cals, serving };
+
+    // Reuse a cached sprite for the same dish (name match) before spending on a new generation.
+    const prior = mealHistory().find(m => m.sprite && m.name.toLowerCase() === nm.toLowerCase());
+    if (prior?.sprite) { onAdd({ ...base, sprite: prior.sprite }); return; }
+
+    // Only photo-scanned meals get a pixel digest; a manual entry has no photo to stylize.
+    if (!capturedImage) { onAdd(base); return; }
+
+    setDigesting(true);
+    const sprite = await generatePixelSprite(capturedImage, nm);
+    setDigesting(false);
+    onAdd(sprite ? { ...base, sprite } : base);
   }
 
   return (
@@ -496,8 +581,9 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
           }, 'Cancel'),
           React.createElement('button', {
             onClick: handleSubmit,
-            className: 'flex-1 bg-green-500 hover:bg-green-600 text-white rounded-xl py-3 text-sm font-semibold transition-colors'
-          }, 'Add Meal')
+            disabled: digesting,
+            className: 'flex-1 bg-green-500 hover:bg-green-600 disabled:bg-green-300 text-white rounded-xl py-3 text-sm font-semibold transition-colors'
+          }, digesting ? 'Digesting…' : 'Add Meal')
         )
       )
     )
