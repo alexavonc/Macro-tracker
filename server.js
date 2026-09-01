@@ -220,7 +220,14 @@ http.createServer((req, res) => {
     fs.readFile(list[0], (err, data) => {
       if (err) { tryNext(list.slice(1)); return; }
       const ct = list[0].endsWith('index.html') ? 'text/html' : contentType;
-      res.writeHead(200, { 'Content-Type': ct, 'Cache-Control': 'no-cache' });
+      // Content-hash ETag: always revalidate (no-cache), but skip re-downloading unchanged files.
+      const etag = '"' + crypto.createHash('sha1').update(data).digest('base64') + '"';
+      if (req.headers['if-none-match'] === etag) {
+        res.writeHead(304, { 'ETag': etag, 'Cache-Control': 'no-cache' });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': ct, 'Cache-Control': 'no-cache', 'ETag': etag });
       res.end(data);
     });
   };
