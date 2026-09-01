@@ -4,6 +4,7 @@ const { useState, useEffect, useCallback, useRef } = React;
 const MEALS_KEY = 'macro-tracker-meals';
 const GOALS_KEY = 'macro-tracker-goals';
 const PROFILE_KEY = 'macro-tracker-profile';
+const SPRITES_KEY = 'macro-tracker-sprites';
 // profile = { units:'metric'|'imperial', heightCm, weightKg, age, sex:'male'|'female',
 //             activity:'sedentary'|'light'|'moderate'|'active'|'veryActive',
 //             goalDir:'lose'|'maintain'|'gain' }  — null until onboarding (A3) completes
@@ -18,6 +19,9 @@ function storageGet(key) {
 function storageSet(key, value) {
   try { window.localStorage.setItem(key, JSON.stringify(value)); } catch {}
 }
+
+// Shared sprite store (base64 keyed by id) — provided by App, consumed by MealCard/MealForm.
+const SpriteCtx = React.createContext({ resolve: () => null, add: () => {} });
 
 // ─── Firebase helpers ─────────────────────────────────────────────────────────
 function isFirebaseConfigured() {
@@ -298,11 +302,13 @@ function MacroBar({ label, value, goal, color }) {
 
 // ─── Meal Card ────────────────────────────────────────────────────────────────
 function MealCard({ meal, onDelete }) {
+  const { resolve } = React.useContext(SpriteCtx);
+  const spr = resolve(meal);
   const cals = meal.calories || calcCals(meal.protein, meal.carbs, meal.fat);
   return (
     React.createElement('div', { className: 'flex items-center justify-between py-3 border-b border-gray-50 last:border-0' },
       React.createElement('div', { className: 'flex items-center gap-3 flex-1 min-w-0' },
-        meal.sprite && React.createElement('img', { src: meal.sprite, alt: '', style: { width: 40, height: 40, borderRadius: 8, imageRendering: 'pixelated', flexShrink: 0, background: '#f9fafb', objectFit: 'contain' } }),
+        spr && React.createElement('img', { src: spr, alt: '', style: { width: 40, height: 40, borderRadius: 8, imageRendering: 'pixelated', flexShrink: 0, background: '#f9fafb', objectFit: 'contain' } }),
         React.createElement('div', { className: 'min-w-0' },
         React.createElement('div', { className: 'font-medium text-gray-800 text-sm truncate' }, meal.name),
         meal.serving && React.createElement('div', { className: 'text-xs text-gray-400 mt-0.5' }, meal.serving),
@@ -404,7 +410,7 @@ async function generatePixelSprite(photoDataUrl, foodName) {
     form.append('image', blob, `food.${ext}`);
     form.append('prompt', `${PIXEL_SPRITE_PROMPT}\nThe food item is: ${foodName || 'a meal'}.`);
     form.append('size', '1024x1024');
-    form.append('quality', 'low');
+    form.append('quality', 'medium');
     form.append('background', 'transparent');
     form.append('output_format', 'png');
     form.append('n', '1');
@@ -414,7 +420,7 @@ async function generatePixelSprite(photoDataUrl, foodName) {
     const b64 = data.data?.[0]?.b64_json;
     if (!b64) throw new Error('No image returned');
     const full = `data:image/png;base64,${b64}`;          // high-res, shown on the digest flip
-    const thumb = await downscaleToSprite(full, 128);      // small, stored on the meal for the card
+    const thumb = await downscaleToSprite(full, 256);      // crisp, deduped in the sprite store
     return { full, thumb };
   } catch (e) {
     console.error('[pixel sprite]', e);
@@ -500,7 +506,7 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
         React.createElement('div', { style: { position: 'absolute', inset: 0, borderRadius: '50%', overflow: 'hidden', backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', border: '3px solid #f3f4f6' } },
           React.createElement('img', { src: photo, alt: '', style: { width: '100%', height: '100%', objectFit: 'cover' } })
         ),
-        React.createElement('div', { style: { position: 'absolute', inset: 0, borderRadius: '50%', backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', transform: 'rotateY(180deg)', background: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' } },
+        React.createElement('div', { style: { position: 'absolute', inset: 0, borderRadius: '50%', backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', transform: 'rotateY(180deg)', background: '#ffffff', border: '3px solid #f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' } },
           sprite && React.createElement('img', { src: sprite.full, alt: '', style: { width: '80%', height: '80%', objectFit: 'contain' } })
         )
       )
@@ -513,6 +519,7 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
 }
 
 function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = null, initError = '' }) {
+  const { resolve: resolveSprite, add: addSprite } = React.useContext(SpriteCtx);
   const [name, setName] = useState(prefill?.name || '');
   const [protein, setProtein] = useState(prefill?.protein || '');
   const [carbs, setCarbs] = useState(prefill?.carbs || '');
@@ -614,11 +621,13 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
     base.dish = dishKey;
 
     // Reuse a cached sprite: same image (exact) → same dish (vision) → same typed name.
-    const prior = mealHistory().find(m => m.sprite && (
+    const prior = mealHistory().find(m => resolveSprite(m) && (
       m.imageHash === h || (m.dish && m.dish === dishKey) || m.name.toLowerCase() === nm.toLowerCase()
     ));
+    const cachedSprite = prior ? resolveSprite(prior) : null;
+    const spriteId = (prior && prior.spriteId) || h;
     // Hand off to the full-screen digest animation; it generates (or reuses) then adds the meal via onDone.
-    setDigest({ base, photo: capturedImage, foodName: nm, cachedSprite: prior?.sprite || null });
+    setDigest({ base, photo: capturedImage, foodName: nm, cachedSprite, spriteId });
   }
 
   return React.createElement(React.Fragment, null,
@@ -626,7 +635,7 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
       photo: digest.photo,
       foodName: digest.foodName,
       makeSprite: () => digest.cachedSprite ? Promise.resolve({ full: digest.cachedSprite, thumb: digest.cachedSprite }) : generatePixelSprite(digest.photo, digest.foodName),
-      onDone: sprite => onAdd(sprite ? { ...digest.base, sprite } : digest.base)
+      onDone: sprite => { if (sprite) addSprite(digest.spriteId, sprite); onAdd(sprite ? { ...digest.base, spriteId: digest.spriteId } : digest.base); }
     }),
     React.createElement('div', { className: 'fixed inset-0 z-50 flex items-end justify-center' },
       React.createElement('div', { className: 'absolute inset-0 bg-black/40', onClick: onCancel }),
@@ -1458,9 +1467,28 @@ function App() {
   const [authReady, setAuthReady]     = useState(!isFirebaseConfigured());
   const firestoreSaveRef = useRef(null);
   const latestRef        = useRef(null);
+  const [sprites, setSprites] = useState(() => storageGet(SPRITES_KEY) || {});
+  const spritesRef = useRef(sprites);
 
   // Keep latestRef always current — read inside the debounced save to avoid stale closures
   useEffect(() => { latestRef.current = { meals, goals, profile, user }; });
+
+  // Sprite store: deduped base64 keyed by id, kept OUT of the meals doc (its own Firestore subcollection).
+  const addSprite = useCallback((id, b64) => {
+    if (!id || !b64 || spritesRef.current[id]) return;
+    spritesRef.current = { ...spritesRef.current, [id]: b64 };
+    setSprites(spritesRef.current);
+    storageSet(SPRITES_KEY, spritesRef.current);
+    const u = latestRef.current?.user;
+    if (u && isFirebaseConfigured()) {
+      firebase.firestore().collection('users').doc(u.uid).collection('sprites').doc(id).set({ data: b64 })
+        .catch(e => console.error('[Firestore] sprite save failed:', e));
+    }
+  }, []);
+  const resolveSprite = useCallback(meal => {
+    if (!meal) return null;
+    return meal.spriteId ? (sprites[meal.spriteId] || null) : (meal.sprite || null);
+  }, [sprites]);
 
   // Firebase auth listener + handle redirect result from signInWithRedirect
   useEffect(() => {
@@ -1492,14 +1520,25 @@ function App() {
 
   async function loadUserData(u) {
     try {
-      const snap = await firebase.firestore().collection('users').doc(u.uid).get();
-      if (!snap.exists) return;
-      const d = snap.data();
-      if (d.goals) setGoals(d.goals);
-      if (d.profile) { setProfile(d.profile); storageSet(PROFILE_KEY, d.profile); }
-      if (d.meals && Object.keys(d.meals).length > 0) {
-        setMeals(d.meals);
-        storageSet(MEALS_KEY, d.meals);
+      const ref = firebase.firestore().collection('users').doc(u.uid);
+      const snap = await ref.get();
+      if (snap.exists) {
+        const d = snap.data();
+        if (d.goals) setGoals(d.goals);
+        if (d.profile) { setProfile(d.profile); storageSet(PROFILE_KEY, d.profile); }
+        if (d.meals && Object.keys(d.meals).length > 0) {
+          setMeals(d.meals);
+          storageSet(MEALS_KEY, d.meals);
+        }
+      }
+      // Load the sprite subcollection into the store (kept out of the main doc).
+      const sprSnap = await ref.collection('sprites').get();
+      if (!sprSnap.empty) {
+        const merged = { ...spritesRef.current };
+        sprSnap.forEach(doc => { const v = doc.data(); if (v && v.data) merged[doc.id] = v.data; });
+        spritesRef.current = merged;
+        setSprites(merged);
+        storageSet(SPRITES_KEY, merged);
       }
     } catch(e) { console.error('[Firestore] Load failed:', e); }
   }
@@ -1596,6 +1635,7 @@ function App() {
   }
 
   return (
+    React.createElement(SpriteCtx.Provider, { value: { resolve: resolveSprite, add: addSprite } },
     React.createElement('div', { className: 'relative w-full h-screen bg-gray-50 flex flex-col overflow-hidden' },
 
       // Pages
@@ -1660,6 +1700,7 @@ function App() {
         onComplete: (prof, g) => { setProfile(prof); setGoals(g); setShowProfileEdit(false); },
         onCancel: () => setShowProfileEdit(false)
       })
+    )
     )
   );
 }
