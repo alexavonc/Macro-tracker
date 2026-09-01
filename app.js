@@ -102,66 +102,93 @@ function deriveGoals(profile) {
   return { calories: Math.round(calories / 10) * 10, protein: proteinG, carbs: carbsG, fat: fatG };
 }
 
-// ─── Pet system — sprite sheet ───────────────────────────────────────────────
-// Sheet: public/assets/cat-sprite.png  →  1536×1024, 7 cols × 4 rows = 28 frames
-// Row 1 (frames  0-6):  idle
-// Row 2 (frames  7-13): hungry
-// Row 3 (frames 14-20): evolve / sparkle
-// Row 4 (frames 21-27): dead (unused in this app — mapped to happy)
+// ─── Gamification — XP / level / coins ────────────────────────────────────────
+const GAME_KEY = 'macro-tracker-game';
+const XP_PER_MEAL   = 25;
+const COINS_PER_MEAL = 10;
+const GOAL_XP_BONUS   = 100;   // awarded when the day's calorie goal is reached
+const GOAL_COIN_BONUS = 50;
 
-const SPRITE_PATH = '/assets/cat-sprite.png';
+// Level curve: level N → N+1 costs N·125 XP (so LV.12 → 1,500 to next, matching the design mock).
+function xpToNext(level) { return level * 125; }
+
+function applyRewards(game, addXp, addCoins) {
+  let { level, xp, coins } = game || { level: 1, xp: 0, coins: 0 };
+  xp += addXp; coins += addCoins;
+  while (xp >= xpToNext(level)) { xp -= xpToNext(level); level++; }
+  return { level, xp, coins };
+}
+
+// Seed a starting level/coins from meals already logged, so returning users don't restart at zero.
+function seedGame(meals) {
+  const total = Object.values(meals || {}).reduce((n, arr) => n + (arr ? arr.length : 0), 0);
+  return applyRewards({ level: 1, xp: 0, coins: 0 }, total * XP_PER_MEAL, total * COINS_PER_MEAL);
+}
+
+// Did the user log ≥1 meal on the day `offset` days before today?
+function loggedOnDayOffset(meals, offset) {
+  return ((meals[toDateKey(addDays(today(), -offset))]) || []).length > 0;
+}
+
+// Pet mood for the home scene (see § Character system mapping).
+function petMood(meals, justFed) {
+  if (justFed) return 'eat';
+  const last3Empty = !loggedOnDayOffset(meals, 0) && !loggedOnDayOffset(meals, 1) && !loggedOnDayOffset(meals, 2);
+  if (last3Empty) return 'angry';
+  const past2Logged = loggedOnDayOffset(meals, 0) && loggedOnDayOffset(meals, 1);
+  return past2Logged ? 'happy' : 'idle';
+}
+
+// ─── Character system — sprite sheet ─────────────────────────────────────────
+// Sheet: public/assets/character-sprite.png  →  1536×1024, 31 frames.
+// Background-keyed to transparency and frame-sliced offline (see canary session log).
+// Frame index layout:
+//   0-2   idle (3)        7-10  walk-up (4)      15-18 walk-right (4)   25-30 angry (6)
+//   3-6   walk-down (4)   11-14 walk-left (4)    19-24 eating (6)
+// Pet-state mapping (home): idle/happy → idle loop · eat → just-fed · angry → 3-day meal gap.
+
+const SPRITE_PATH = '/assets/character-sprite.png';
 
 const ANIMATIONS = {
-  idle:   { frames: [0,1,2,3,4,5],       fps: 1.62, loop: true  },
-  hungry: { frames: [7,8,9,10,11,12],    fps: 2.16, loop: true  },
-  evolve: { frames: [14,15,16,17,18,19], fps: 5.4,  loop: false },
-  happy:  { frames: [14,15,16,17],       fps: 3.24, loop: true  },
+  // Hold each eyes-open pose ~2s, then a single-frame blink — reads as natural idle, not fluttering.
+  idle:  { frames: [...Array(20).fill(0), 1, ...Array(20).fill(2), 1], fps: 10, loop: true },
+  happy: { frames: [...Array(14).fill(0), 1, ...Array(14).fill(2), 1], fps: 10, loop: true },  // livelier blink cadence
+  eat:   { frames: [19,20,21,22,23,24],    fps: 4.2, loop: true },
+  angry: { frames: [25,26,27,28,29,30],    fps: 3.6, loop: true },
+  walkDown:  { frames: [3,4,5,6],          fps: 6.0, loop: true },
+  walkUp:    { frames: [7,8,9,10],         fps: 6.0, loop: true },
+  walkLeft:  { frames: [11,12,13,14],      fps: 6.0, loop: true },
+  walkRight: { frames: [15,16,17,18],      fps: 6.0, loop: true },
 };
 
-// Per-frame source rects [sx, sy, sw, sh] in the original 1536×1024 sprite sheet.
-// Derived by cross-cell connected-component analysis: floods across ±1 cell boundary
-// to capture cats whose bodies physically cross cell edges (e.g. the sleeping cat).
+// Per-frame source rects [sx, sy, sw, sh] in the 1536×1024 sheet (tight bbox per figure).
 const FRAME_BBOXES = [
-  [  103,   87, 147, 151],  //  0 idle c0
-  [  312,   87, 145, 150],  //  1 idle c1
-  [  502,   87, 147, 151],  //  2 idle c2
-  [  695,   87, 146, 151],  //  3 idle c3
-  [  887,   87, 147, 151],  //  4 idle c4
-  [ 1080,   87, 145, 151],  //  5 idle c5
-  [ 1317,    0, 219, 256],  //  6 (unused)
-  [  104,  292, 153, 140],  //  7 hungry c0
-  [  310,  304, 149, 129],  //  8 hungry c1
-  [  488,  304, 155, 128],  //  9 hungry c2
-  [  678,  296, 147, 137],  // 10 hungry c3
-  [  875,  291, 146, 141],  // 11 hungry c4
-  [ 1066,  328, 178, 115],  // 12 hungry c5 — sleeping cat crosses cell boundary
-  [ 1317,  256, 219, 256],  // 13 (unused)
-  [  105,  512, 152, 124],  // 14 evolve c0
-  [  312,  512, 149, 124],  // 15 evolve c1
-  [  502,  512, 131, 124],  // 16 evolve c2
-  [  693,  512, 122, 124],  // 17 evolve c3
-  [  888,  512, 132, 124],  // 18 evolve c4
-  [ 1064,  512, 172, 128],  // 19 evolve c5 — crosses cell boundary
-  [ 1317,  512, 219, 256],  // 20 (unused)
-  [    0,  768, 219, 256],  // 21 (unused)
-  [  219,  768, 220, 256],  // 22 (unused)
-  [  439,  768, 219, 256],  // 23 (unused)
-  [  658,  768, 220, 256],  // 24 (unused)
-  [  878,  768, 219, 256],  // 25 (unused)
-  [ 1097,  768, 220, 256],  // 26 (unused)
-  [ 1317,  768, 219, 256],  // 27 (unused)
+  [51,65,104,209],[188,64,102,210],[320,64,103,210],                                 // 0-2   idle
+  [542,90,85,164],[640,90,85,165],[738,90,85,166],[832,90,88,166],                   // 3-6   walk-down
+  [1011,85,85,169],[1117,83,83,173],[1216,83,86,173],[1324,85,84,171],               // 7-10  walk-up
+  [506,330,74,155],[622,330,82,154],[745,330,80,155],[867,330,81,155],               // 11-14 walk-left
+  [1008,330,81,155],[1133,328,80,160],[1248,329,80,159],[1366,330,80,155],           // 15-18 walk-right
+  [306,551,93,170],[464,551,99,170],[626,551,100,170],[800,551,94,170],[968,552,93,169],[1124,572,93,149], // 19-24 eating
+  [140,787,100,192],[320,786,102,193],[512,789,107,190],[702,789,107,190],[891,789,109,190],[1164,777,124,202], // 25-30 angry
 ];
 
-// MAX=200 accommodates the widest cross-boundary frame (f12: sw=178) at size=240
-const MAX_FRAME_W = 200;
-const MAX_FRAME_H = 200;
+// MAX accommodates the tallest frame (idle, h=210) and widest (angry c6, w=124).
+const MAX_FRAME_W = 124;
+const MAX_FRAME_H = 210;
 
-// Alpha-weighted centroid x within each bbox (recomputed after cross-cell expansion).
+// Per-frame draw-scale multiplier (default 1). Angry frame 30's character is drawn ~6% larger
+// in the source art; shrink it so its height matches the rest of the set (feet stay anchored).
+const FRAME_SCALE = { 30: 0.944 };
+
+// Alpha-weighted centroid x within each bbox (for horizontal centering on the baseline).
 const FRAME_CENT_X = [
-   66.4,  63.2,  67.6,  67.0,  67.1,  67.1, 109.5,  // 0-6  idle row
-   66.9,  66.6,  69.7,  68.2,  68.7,  81.1, 109.5,  // 7-13 hungry row
-   70.2,  71.5,  59.7,  55.2,  64.6,  81.8, 109.5,  // 14-20 evolve row
-  109.5, 109.5, 109.5, 109.5, 109.5, 109.5, 109.5,  // 21-27 dead row (unused)
+  52.2,50.2,51.7,                          // idle
+  42.4,42.8,43.1,46.7,                      // walk-down
+  41.2,39.9,43.4,41.1,                      // walk-up
+  36.4,39.1,40.2,38.9,                      // walk-left
+  42.2,40.2,41.2,40.6,                      // walk-right
+  47.8,52.7,53.6,49.4,48.2,48.2,            // eating
+  49.5,51.4,53.7,54.0,56.1,63.9,            // angry
 ];
 
 // Global sprite cache — load once, resolve all pending callbacks
@@ -210,9 +237,10 @@ function PetCat({ state = 'idle', size = 160 }) {
 
       const fi = anim.frames[frameIdxRef.current];
       const [sx, sy, sw, sh] = FRAME_BBOXES[fi];
-      const dw = Math.round(sw * scale);
-      const dh = Math.round(sh * scale);
-      const dx = Math.round(size / 2 - FRAME_CENT_X[fi] * scale);
+      const fscale = scale * (FRAME_SCALE[fi] || 1);
+      const dw = Math.round(sw * fscale);
+      const dh = Math.round(sh * fscale);
+      const dx = Math.round(size / 2 - FRAME_CENT_X[fi] * fscale);
       const dy = size - dh;
       ctx.drawImage(sprite, sx, sy, sw, sh, dx, dy, dw, dh);
 
@@ -999,17 +1027,146 @@ function SettingsSheet({ user, goals, onGoalsChange, profile, onEditProfile, onS
   );
 }
 
-// ─── Home Page ────────────────────────────────────────────────────────────────
-function HomePage({ meals, goals, onAddMeal, onDeleteMeal, selectedDate, onDateChange, onOpenSettings }) {
-  const [showForm, setShowForm] = useState(false);
-  const [justFed, setJustFed] = useState(false);
-  const [evolveActive, setEvolveActive] = useState(false);
-  const fedTimerRef = useRef(null);
-  const evolveTimerRef = useRef(null);
+// ─── MacroWorld theme (pixel-game home) ───────────────────────────────────────
+const PIXEL = "'Pixelify Sans', 'Silkscreen', ui-monospace, monospace";
+const THEME = {
+  cream:   '#F4EEE1',   // card fill
+  creamHi: '#FBF7EE',   // lighter card fill
+  ink:     '#2E2A24',   // dark text
+  sub:     '#8C8375',   // muted text
+  line:    'rgba(46,42,36,0.10)',
+  track:   '#E4DBC9',   // progress track
+  green:   '#4B6B3E',   // primary accent
+  greenDk: '#2E3B26',   // nav bar
+  gold:    '#E7B23E',   // xp / active
+  protein: '#3E7CB1',
+  carbs:   '#CF4B3E',
+  fat:     '#E7A83A',
+  proteinTint: '#DCE9F3',
+  carbsTint:   '#F6DCD8',
+  fatTint:     '#F6E7C9',
+};
+const pixelCard = (extra = {}) => ({
+  background: THEME.cream, borderRadius: 18, border: '1px solid ' + THEME.line,
+  boxShadow: '0 2px 0 rgba(46,42,36,0.06), 0 6px 16px rgba(46,42,36,0.06)', ...extra,
+});
+const pixelLabel = (extra = {}) => ({
+  fontFamily: PIXEL, fontWeight: 700, letterSpacing: '0.04em', color: THEME.ink, ...extra,
+});
 
-  const dateKey = toDateKey(selectedDate);
-  const dayMeals = meals[dateKey] || [];
-  const isToday = isSameDay(selectedDate, today());
+// A cropped head-and-shoulders portrait of the idle character, for the LV badge.
+function CharacterFace({ size = 42 }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    loadSprite(img => {
+      const cv = ref.current; if (!cv) return;
+      const ctx = cv.getContext('2d');
+      ctx.clearRect(0, 0, size, size);
+      const [sx, sy, sw] = FRAME_BBOXES[0];
+      const sh = 108;                                   // head + shoulders slice of the idle frame
+      const scale = Math.max(size / sw, size / sh);
+      const dw = sw * scale, dh = sh * scale;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, sx, sy, sw, sh, (size - dw) / 2, 2, dw, dh);
+    });
+  }, [size]);
+  return React.createElement('canvas', { ref, width: size, height: size, style: { display: 'block' } });
+}
+
+// Cumulative calories-over-day line chart (stepped), 6AM → midnight.
+function CalorieChart({ dayMeals, goalCals }) {
+  const W = 200, H = 92, padL = 24, padR = 6, padT = 8, padB = 16;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const startH = 6, endH = 24;
+
+  const timed = dayMeals.map((m, i) => {
+    let h;
+    if (m.loggedAt) { const d = new Date(m.loggedAt); h = d.getHours() + d.getMinutes() / 60; }
+    else h = startH + 2 + (i + 1) * (endH - startH - 4) / (dayMeals.length + 1);  // spread untimed meals
+    return { h: Math.min(endH, Math.max(startH, h)), cals: Number(m.calories) || 0 };
+  }).sort((a, b) => a.h - b.h);
+
+  let cum = 0;
+  const pts = timed.map(t => { cum += t.cals; return { h: t.h, y: cum }; });
+  const yMax = Math.max(goalCals || 2000, cum, 2000);
+  const xOf = h => padL + ((h - startH) / (endH - startH)) * plotW;
+  const yOf = v => padT + plotH - (Math.min(v, yMax) / yMax) * plotH;
+
+  let d = `M ${xOf(startH)} ${yOf(0)}`;
+  pts.forEach(p => { d += ` H ${xOf(p.h).toFixed(1)} V ${yOf(p.y).toFixed(1)}`; });
+
+  const gridVals = [0, yMax / 2, yMax];
+  const gridLabel = v => v >= 1000 ? (v / 1000) + 'k' : String(Math.round(v));
+  const xTicks = [ [6,'6AM'], [12,'12PM'], [18,'6PM'], [24,'12AM'] ];
+  const last = pts[pts.length - 1];
+
+  return React.createElement('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', style: { display: 'block', maxWidth: 240 } },
+    ...gridVals.map((v, i) => React.createElement('line', {
+      key: 'g' + i, x1: padL, y1: yOf(v), x2: W - padR, y2: yOf(v),
+      stroke: THEME.line, strokeWidth: 1, strokeDasharray: i === 0 ? '0' : '3 3'
+    })),
+    ...gridVals.map((v, i) => React.createElement('text', {
+      key: 't' + i, x: padL - 4, y: yOf(v) + 3, textAnchor: 'end',
+      style: { fontFamily: PIXEL, fontSize: 8, fill: THEME.sub }
+    }, gridLabel(v))),
+    ...xTicks.map(([h, lab], i) => React.createElement('text', {
+      key: 'x' + i, x: xOf(h), y: H - 3, textAnchor: h === 24 ? 'end' : h === 6 ? 'start' : 'middle',
+      style: { fontFamily: PIXEL, fontSize: 8, fill: THEME.sub }
+    }, lab)),
+    React.createElement('path', { d, fill: 'none', stroke: THEME.green, strokeWidth: 2.5, strokeLinejoin: 'round', strokeLinecap: 'round' }),
+    last && React.createElement('circle', { cx: xOf(last.h), cy: yOf(last.y), r: 3.5, fill: THEME.creamHi, stroke: THEME.green, strokeWidth: 2 })
+  );
+}
+
+// One macro row: colored icon tile · label · grams · progress bar · % pill.
+function MacroRow({ icon, label, value, goal, color, tint }) {
+  const pct  = goal > 0 ? Math.round((value / goal) * 100) : 0;
+  const fill = Math.max(0, Math.min(100, pct));
+  return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 11, padding: '7px 0' } },
+    React.createElement('div', { style: { width: 38, height: 38, borderRadius: 10, background: color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: 'inset 0 -2px 0 rgba(0,0,0,0.12)' } },
+      React.createElement(Icon, { name: icon, size: 19, color: 'white' })),
+    React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 } },
+        React.createElement('span', { style: pixelLabel({ fontSize: 12 }) }, label.toUpperCase()),
+        React.createElement('span', { style: { fontSize: 12, color: THEME.sub, fontWeight: 600 } }, `${Math.round(value)}g / ${goal}g`)),
+      React.createElement('div', { style: { height: 8, borderRadius: 6, background: THEME.track, overflow: 'hidden' } },
+        React.createElement('div', { style: { width: fill + '%', height: '100%', background: color, borderRadius: 6, transition: 'width .4s' } }))),
+    React.createElement('div', { style: { background: tint, borderRadius: 9, padding: '6px 4px', minWidth: 48, textAlign: 'center', flexShrink: 0 } },
+      React.createElement('span', { style: pixelLabel({ fontSize: 13, color }) }, pct + '%'))
+  );
+}
+
+// Small pixel-sprite (or emoji fallback) thumbnail for a meal.
+function MealThumb({ meal, size = 44, radius = 12 }) {
+  const { resolve } = React.useContext(SpriteCtx);
+  const src = resolve(meal);
+  return React.createElement('div', {
+    style: { width: size, height: size, borderRadius: radius, background: THEME.creamHi, border: '1px solid ' + THEME.line, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }
+  }, src
+    ? React.createElement('img', { src, alt: '', style: { width: '100%', height: '100%', objectFit: 'contain', imageRendering: 'auto' } })
+    : React.createElement('span', { style: { fontSize: size * 0.5 } }, '🍽️'));
+}
+
+// A tappable meal line for the "Today's Meals" card.
+function MealListRow({ meal, onOpen, divider }) {
+  const cals = meal.calories || calcCals(meal.protein, meal.carbs, meal.fat);
+  return React.createElement('button', {
+    onClick: () => onOpen && onOpen(meal),
+    style: { display: 'flex', alignItems: 'center', gap: 12, width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '10px 0', textAlign: 'left', borderTop: divider ? '1px solid ' + THEME.line : 'none' }
+  },
+    React.createElement(MealThumb, { meal }),
+    React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+      React.createElement('div', { style: { fontWeight: 700, fontSize: 15, color: THEME.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, meal.name || 'Meal'),
+      meal.serving && React.createElement('div', { style: { fontSize: 12, color: THEME.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, meal.serving)),
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 } },
+      React.createElement('span', { style: { fontWeight: 700, fontSize: 14, color: THEME.ink } }, `${cals} kcal`),
+      React.createElement(Icon, { name: 'ChevronRight', size: 16, color: THEME.sub }))
+  );
+}
+
+// ─── Home Page ────────────────────────────────────────────────────────────────
+function HomePage({ meals, goals, game, justFed, onOpenMeal, onOpenSettings, onGoProgress, onGoMeals }) {
+  const dayMeals = meals[toDateKey(today())] || [];
 
   const totals = dayMeals.reduce((acc, m) => ({
     protein: acc.protein + (Number(m.protein) || 0),
@@ -1019,154 +1176,219 @@ function HomePage({ meals, goals, onAddMeal, onDeleteMeal, selectedDate, onDateC
   }), { protein: 0, carbs: 0, fat: 0, calories: 0 });
 
   const goalCals = goals.calories || (goals.protein * 4 + goals.carbs * 4 + goals.fat * 9);
-  const calPct   = goalCals > 0 ? totals.calories / goalCals : 0;
+  const calPct   = goalCals > 0 ? Math.min(1, totals.calories / goalCals) : 0;
   const calsLeft = Math.round(goalCals - totals.calories);
   const calsOver = calsLeft < 0;
 
-  // Pet state machine
-  const petState = evolveActive ? 'evolve'
-    : justFed ? 'happy'
-    : (isToday && calPct < 0.2) ? 'hungry'
-    : 'idle';
+  const petState = petMood(meals, justFed);
+  const { level, xp } = game || { level: 1, xp: 0 };
+  const xpNeed = xpToNext(level);
+  const coins  = (game && game.coins) || 0;
 
-  function handleMealAdd(meal) {
-    const mealCals = meal.calories || calcCals(meal.protein, meal.carbs, meal.fat);
-    const willHitGoal = goalCals > 0 && totals.calories < goalCals && (totals.calories + mealCals) >= goalCals;
+  // Every meal logged today, newest first — the latest thing you logged is at the top. Card grows to fit all.
+  const shownMeals = dayMeals.slice().sort((a, b) => (b.loggedAt || 0) - (a.loggedAt || 0));
 
-    onAddMeal(dateKey, meal);
+  const sectionHead = (title, action, onAction) => React.createElement('div', {
+    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }
+  },
+    React.createElement('span', { style: pixelLabel({ fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }) }, title),
+    action && React.createElement('button', {
+      onClick: onAction,
+      style: { background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3, ...pixelLabel({ fontSize: 11, color: THEME.green }) }
+    }, action, React.createElement(Icon, { name: 'ChevronRight', size: 13, color: THEME.green }))
+  );
 
-    // Trigger happy animation
-    clearTimeout(fedTimerRef.current);
-    setJustFed(true);
-    fedTimerRef.current = setTimeout(() => setJustFed(false), 3000);
-
-    // Trigger evolve after happy if goal reached
-    if (willHitGoal) {
-      clearTimeout(evolveTimerRef.current);
-      evolveTimerRef.current = setTimeout(() => {
-        setEvolveActive(true);
-        setTimeout(() => setEvolveActive(false), 5000);
-      }, 3100);
+  return React.createElement('div', {
+    style: {
+      position: 'relative', height: '100%', overflow: 'hidden',
+      backgroundColor: '#6E8E4E',
     }
-  }
+  },
 
-  return (
-    React.createElement('div', {
-      style: {
-        display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', overflow: 'hidden',
-        backgroundImage: "url('/assets/room-bg.PNG')",
-        backgroundSize: 'cover',
-        backgroundPosition: 'center top',
-      }
+    // ── Full-screen scenery (expanded art reaches the bottom edge — no fill gap) ──
+    React.createElement('div', { style: { position: 'absolute', inset: 0, backgroundImage: "url('/assets/scene-bg.jpg')", backgroundSize: 'cover', backgroundPosition: 'center top', zIndex: 0 } }),
+
+    // ── Backdrop chrome: LV/XP · coins · character (fixed, don't scroll) ──
+    // LV / XP card
+    React.createElement('div', { style: pixelCard({ position: 'absolute', top: 14, left: 12, zIndex: 1, display: 'flex', alignItems: 'center', gap: 9, padding: '7px 12px 7px 8px' }) },
+      React.createElement('div', { style: { width: 42, height: 42, borderRadius: 10, overflow: 'hidden', border: '1px solid ' + THEME.line, background: THEME.creamHi, flexShrink: 0 } },
+        React.createElement(CharacterFace, { size: 42 })),
+      React.createElement('div', null,
+        React.createElement('div', { style: pixelLabel({ fontSize: 15, lineHeight: 1 }) }, 'LV. ' + level),
+        React.createElement('div', { style: { width: 108, height: 9, borderRadius: 5, background: '#3B372F', overflow: 'hidden', margin: '5px 0 3px' } },
+          React.createElement('div', { style: { width: Math.round((xp / xpNeed) * 100) + '%', height: '100%', background: THEME.gold, borderRadius: 5 } })),
+        React.createElement('div', { style: pixelLabel({ fontSize: 9, color: THEME.sub }) }, `${xp} / ${xpNeed.toLocaleString()} XP`))
+    ),
+    // Coins card
+    React.createElement('div', { style: pixelCard({ position: 'absolute', top: 14, right: 12, zIndex: 1, display: 'flex', alignItems: 'center', gap: 9, padding: '9px 14px' }) },
+      React.createElement('div', { style: { width: 30, height: 30, borderRadius: '50%', background: 'radial-gradient(circle at 35% 30%, #F6D169, ' + THEME.gold + ' 70%)', border: '2px solid #C8912B', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 } },
+        React.createElement('div', { style: { width: 16, height: 16, borderRadius: '50%', border: '2px solid rgba(200,145,43,0.6)' } })),
+      React.createElement('div', { style: { textAlign: 'right' } },
+        React.createElement('div', { style: pixelLabel({ fontSize: 17, lineHeight: 1 }) }, coins.toLocaleString()),
+        React.createElement('div', { style: pixelLabel({ fontSize: 9, color: THEME.sub, marginTop: 2 }) }, 'COINS'))
+    ),
+    // Character standing on the path
+    React.createElement('div', { style: { position: 'absolute', top: '24%', left: '50%', transform: 'translateX(-50%)', zIndex: 1, pointerEvents: 'none' } },
+      React.createElement(PetCat, { state: petState, size: 150 })),
+
+    // ── Scrollable cards floating over the scenery ──
+    React.createElement('div', { style: { position: 'absolute', inset: 0, overflowY: 'auto', zIndex: 2, paddingTop: '43vh', paddingBottom: 112 } },
+
+    // ── Calories card ──
+    React.createElement('div', { style: pixelCard({ margin: '14px 14px 12px', padding: 16, display: 'flex', gap: 12 }) },
+      React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+        React.createElement('div', { style: pixelLabel({ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }) }, '🔥', 'CALORIES'),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 10 } },
+          React.createElement('span', { style: { fontSize: 34, fontWeight: 800, color: THEME.ink, letterSpacing: '-0.02em' } }, totals.calories.toLocaleString()),
+          React.createElement('span', { style: { fontSize: 13, color: THEME.sub, fontWeight: 600 } }, '/ ' + Math.round(goalCals).toLocaleString() + ' kcal')),
+        React.createElement('div', { style: { height: 12, borderRadius: 7, background: '#DCE6CE', overflow: 'hidden', marginBottom: 8 } },
+          React.createElement('div', { style: { width: (calPct * 100) + '%', height: '100%', background: calsOver ? THEME.carbs : THEME.green, borderRadius: 7, transition: 'width .4s' } })),
+        React.createElement('div', { style: { fontSize: 13, color: THEME.sub, fontWeight: 600 } }, calsOver ? Math.abs(calsLeft).toLocaleString() + ' kcal over' : calsLeft.toLocaleString() + ' kcal left')),
+      React.createElement('div', { style: { width: '46%', display: 'flex', alignItems: 'center' } },
+        React.createElement(CalorieChart, { dayMeals, goalCals }))
+    ),
+
+    // ── Macros breakdown card ──
+    React.createElement('div', { style: pixelCard({ margin: '0 14px 12px', padding: '14px 16px' }) },
+      sectionHead(React.createElement('span', { style: { display: 'flex', alignItems: 'center', gap: 7 } }, React.createElement(Icon, { name: 'Utensils', size: 15, color: THEME.ink }), 'MACROS BREAKDOWN'), 'VIEW DETAILS', onGoProgress),
+      React.createElement(MacroRow, { icon: 'Dumbbell', label: 'Protein', value: totals.protein, goal: goals.protein, color: THEME.protein, tint: THEME.proteinTint }),
+      React.createElement(MacroRow, { icon: 'Wheat',    label: 'Carbs',   value: totals.carbs,   goal: goals.carbs,   color: THEME.carbs,   tint: THEME.carbsTint }),
+      React.createElement(MacroRow, { icon: 'Droplet',  label: 'Fats',    value: totals.fat,     goal: goals.fat,     color: THEME.fat,     tint: THEME.fatTint })
+    ),
+
+    // ── Today's meals card ──
+    React.createElement('div', { style: pixelCard({ margin: '0 14px 12px', padding: '14px 16px' }) },
+      sectionHead(React.createElement('span', { style: { display: 'flex', alignItems: 'center', gap: 7 } }, React.createElement(Icon, { name: 'UtensilsCrossed', size: 15, color: THEME.ink }), "TODAY'S MEALS"), dayMeals.length > 0 ? 'VIEW ALL' : null, onGoMeals),
+      shownMeals.length > 0
+        ? shownMeals.map((m, i) => React.createElement(MealListRow, { key: m.id || i, meal: m, onOpen: onOpenMeal, divider: i > 0 }))
+        : React.createElement('div', { style: { textAlign: 'center', padding: '18px 0 10px' } },
+            React.createElement('div', { style: { fontSize: 30, marginBottom: 6 } }, '🍽️'),
+            React.createElement('div', { style: { color: THEME.sub, fontSize: 13 } }, 'No meals logged yet — tap Add below.'))
+    )
+    )
+  );
+}
+
+// ─── Meal Detail — full-screen sprite + macros (reuses the digest reveal look) ─
+function MealDetail({ meal, onClose }) {
+  const { resolve } = React.useContext(SpriteCtx);
+  if (!meal) return null;
+  const src  = resolve(meal);
+  const cals = meal.calories || calcCals(meal.protein, meal.carbs, meal.fat);
+
+  const macroCol = (label, val, color, tint) => React.createElement('div', { style: { flex: 1, textAlign: 'center' } },
+    React.createElement('div', { style: { width: 34, height: 34, borderRadius: 10, background: tint, margin: '0 auto 8px', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+      React.createElement('div', { style: { width: 12, height: 12, borderRadius: '50%', background: color } })),
+    React.createElement('div', { style: { fontSize: 20, fontWeight: 800, color: THEME.ink } }, Math.round(val) + 'g'),
+    React.createElement('div', { style: pixelLabel({ fontSize: 10, color: THEME.sub, marginTop: 2 }) }, label.toUpperCase())
+  );
+
+  return React.createElement('div', {
+    style: { position: 'fixed', inset: 0, zIndex: 80, background: THEME.creamHi, display: 'flex', flexDirection: 'column', alignItems: 'center' }
+  },
+    React.createElement('button', {
+      onClick: onClose,
+      style: { position: 'absolute', top: 16, right: 16, width: 38, height: 38, borderRadius: '50%', ...pixelCard({ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, cursor: 'pointer' }) }
+    }, React.createElement(Icon, { name: 'X', size: 20, color: THEME.ink })),
+
+    React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, padding: '0 24px' } },
+      React.createElement('div', { style: pixelCard({ width: 240, height: 240, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }) },
+        src ? React.createElement('img', { src, alt: '', style: { width: '82%', height: '82%', objectFit: 'contain' } })
+            : React.createElement('span', { style: { fontSize: 96 } }, '🍽️')),
+      React.createElement('div', { style: { textAlign: 'center' } },
+        React.createElement('div', { style: { fontSize: 24, fontWeight: 800, color: THEME.ink, marginBottom: 4, maxWidth: 320 } }, meal.name || 'Meal'),
+        meal.serving && React.createElement('div', { style: { fontSize: 14, color: THEME.sub } }, meal.serving)),
+      React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 6 } },
+        React.createElement('span', { style: { fontSize: 46, fontWeight: 900, color: THEME.green, letterSpacing: '-0.02em' } }, cals.toLocaleString()),
+        React.createElement('span', { style: pixelLabel({ fontSize: 14, color: THEME.sub }) }, 'KCAL'))
+    ),
+
+    React.createElement('div', { style: pixelCard({ margin: '0 16px 28px', padding: '18px 16px', width: 'calc(100% - 32px)', maxWidth: 420, display: 'flex' }) },
+      macroCol('Protein', meal.protein || 0, THEME.protein, THEME.proteinTint),
+      macroCol('Carbs',   meal.carbs   || 0, THEME.carbs,   THEME.carbsTint),
+      macroCol('Fats',    meal.fat     || 0, THEME.fat,     THEME.fatTint))
+  );
+}
+
+// ─── Meals Page — collection album (dining-scene backdrop + card grid) ────────
+const MEALS_PANEL = '#F3ECDD';                 // cream panel over the scene
+const MEALS_CARD  = '#FBF7EC';                 // meal card fill
+const MEALS_GREEN = '#3C5A38';                 // header + meal-name dark green
+const MEALS_LINE  = 'rgba(70,60,40,0.14)';
+
+function MealCollectCard({ meal, onOpen, onLog }) {
+  const { resolve } = React.useContext(SpriteCtx);
+  const src = resolve(meal);
+  return React.createElement('div', {
+    style: { position: 'relative', background: MEALS_CARD, borderRadius: 16, border: '1px solid ' + MEALS_LINE, boxShadow: '0 2px 0 rgba(60,50,30,0.05), 0 6px 14px rgba(60,50,30,0.08)', padding: '12px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }
+  },
+    React.createElement('div', { style: { position: 'absolute', top: 0, right: 12, width: 24, height: 30, background: '#4C7B3B', clipPath: 'polygon(0 0,100% 0,100% 100%,50% 78%,0 100%)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 4, zIndex: 1 } },
+      React.createElement(Icon, { name: 'Check', size: 12, color: 'white', strokeWidth: 3 })),
+    // Tap the image/name to inspect the meal detail.
+    React.createElement('button', {
+      onClick: () => onOpen && onOpen(meal),
+      style: { background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }
     },
+      React.createElement('div', { style: { width: '100%', aspectRatio: '1 / 1', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' } },
+        src ? React.createElement('img', { src, alt: '', style: { width: '100%', height: '100%', objectFit: 'contain' } })
+            : React.createElement('span', { style: { fontSize: '2.6rem' } }, '🍽️')),
+      React.createElement('div', { style: { fontWeight: 800, fontSize: 12.5, color: MEALS_GREEN, textAlign: 'center', lineHeight: 1.12, minHeight: 28, display: 'flex', alignItems: 'center' } }, meal.name || 'Meal')
+    ),
+    // Re-log this past meal — opens the logging screen pre-filled with its macros.
+    React.createElement('button', {
+      onClick: () => onLog && onLog(meal),
+      style: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', background: 'transparent', color: 'rgba(45,40,32,0.62)', border: '1.5px solid rgba(45,40,32,0.22)', borderRadius: 10, padding: '8px 10px', cursor: 'pointer', fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }
+    }, 'Log Meal')
+  );
+}
 
-      // ── Pet name + hearts (top-left) ──
-      React.createElement('div', {
-        style: { position: 'absolute', top: 48, left: 20, zIndex: 30 }
-      },
-        React.createElement('div', {
-          style: { color: 'white', fontWeight: 900, fontSize: 28, lineHeight: 1, textShadow: '1px 1px 0 rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4)' }
-        }, 'Bagel'),
-        React.createElement(PetHearts, { calPct: isToday ? calPct : 0 })
-      ),
+function EmptyMealCard() {
+  return React.createElement('div', {
+    style: { borderRadius: 16, border: '2px dashed rgba(92,80,58,0.32)', background: 'rgba(255,255,255,0.20)', minHeight: 182, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }
+  },
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, color: 'rgba(92,80,58,0.4)' } },
+      React.createElement('span', { style: { fontSize: 11 } }, '✦'),
+      React.createElement('span', { style: { fontFamily: PIXEL, fontWeight: 700, fontSize: 32, lineHeight: 1 } }, '?'),
+      React.createElement('span', { style: { fontSize: 11 } }, '✦')),
+    React.createElement('div', { style: { fontSize: 11, color: 'rgba(92,80,58,0.5)', textAlign: 'center', padding: '0 6px' } }, 'Meal not found yet')
+  );
+}
 
-      // ── Settings gear (top-right) ──
-      React.createElement('button', {
-        onClick: onOpenSettings,
-        style: { position: 'absolute', top: 52, right: 20, zIndex: 30, background: 'none', border: 'none', cursor: 'pointer', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.5))' }
-      }, React.createElement(Icon, { name: 'Settings', size: 22, color: 'white' })),
+function MealsPage({ meals, onOpenMeal, onLogMeal }) {
+  // Dedupe into a collection: one card per unique dish (by sprite, else name), newest first.
+  const seen = new Set(); const collected = [];
+  Object.keys(meals).sort().reverse().forEach(dk => (meals[dk] || []).forEach(m => {
+    const key = m.spriteId || (m.name || '').toLowerCase().trim();
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    collected.push(m);
+  }));
+  const total = Math.max(9, Math.ceil((collected.length + 1) / 3) * 3);
+  const slots = [...collected, ...Array(total - collected.length).fill(null)];
 
-      // ── Cat (sitting on carpet) ──
-      React.createElement('div', {
-        style: {
-          position: 'absolute',
-          top: '32%',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 30,
-          pointerEvents: 'none'
-        }
-      }, React.createElement(PetCat, { state: petState, size: 240 })),
+  const dashLine = () => React.createElement('div', { style: { flex: 1, height: 0, borderTop: '2px dashed ' + MEALS_LINE } });
 
-      // ── White scrollable card ──
-      React.createElement('div', {
-        style: {
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          top: '60%',
-          backgroundColor: 'white',
-          borderTopLeftRadius: 32,
-          borderTopRightRadius: 32,
-          overflowY: 'auto',
-          paddingBottom: 120,
-          zIndex: 20,
-        }
-      },
-        // Date nav inside card
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 8px' } },
-          React.createElement('button', {
-            onClick: () => onDateChange(addDays(selectedDate, -1)),
-            style: { background: 'none', border: 'none', cursor: 'pointer', padding: 4 }
-          }, React.createElement(Icon, { name: 'ChevronLeft', size: 20 })),
-          React.createElement('div', { style: { textAlign: 'center' } },
-            React.createElement('div', { style: { fontWeight: 700, fontSize: 15, color: '#1f2937' } }, dateLabel(selectedDate)),
-            !isToday && React.createElement('div', { style: { fontSize: 11, color: '#9ca3af' } }, formatDay(selectedDate))
-          ),
-          React.createElement('button', {
-            onClick: () => !isToday && onDateChange(addDays(selectedDate, 1)),
-            disabled: isToday,
-            style: { background: 'none', border: 'none', cursor: isToday ? 'default' : 'pointer', padding: 4, opacity: isToday ? 0.3 : 1 }
-          }, React.createElement(Icon, { name: 'ChevronRight', size: 20 }))
-        ),
-
-        // Calories + macros card
-        React.createElement('div', { style: { margin: '0 16px 12px', background: '#f9fafb', borderRadius: 24, padding: '16px 20px' } },
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 } },
-            React.createElement('div', null,
-              React.createElement('div', { style: { fontSize: 11, color: '#9ca3af', marginBottom: 2 } }, calsOver ? 'Calories over' : 'Calories left'),
-              React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 4 } },
-                React.createElement('span', { style: { fontSize: 36, fontWeight: 900, color: calsOver ? '#ef4444' : '#111827' } }, Math.abs(calsLeft).toLocaleString()),
-                React.createElement('span', { style: { fontSize: 13, color: '#9ca3af' } }, 'kcal')
-              )
-            ),
-            React.createElement('button', {
-              onClick: () => setShowForm(true),
-              style: { width: 48, height: 48, borderRadius: '50%', background: 'white', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 1px 4px rgba(0,0,0,.1)' }
-            }, React.createElement(Icon, { name: 'Plus', size: 22 }))
-          ),
-
-          React.createElement('div', { style: { display: 'flex', gap: 16 } },
-            React.createElement(MacroBar, { label: 'Carbs',    value: totals.carbs,   goal: goals.carbs }),
-            React.createElement(MacroBar, { label: 'Fats',     value: totals.fat,     goal: goals.fat }),
-            React.createElement(MacroBar, { label: 'Proteins', value: totals.protein, goal: goals.protein })
-          ),
-
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', marginTop: 12, paddingTop: 12, borderTop: '1px solid #f3f4f6' } },
-            React.createElement(Icon, { name: 'Target', size: 12, color: '#9ca3af' }),
-            React.createElement('span', { style: { fontSize: 11, color: '#9ca3af', marginLeft: 4 } }, `Goal: ${Math.round(goalCals).toLocaleString()} kcal · edit in Settings`)
-          )
-        ),
-
-        // Meals list
-        dayMeals.length > 0
-          ? React.createElement('div', { style: { margin: '0 16px 12px', background: '#f9fafb', borderRadius: 24, padding: '16px 20px' } },
-              React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 8 } }, `Meals · ${dayMeals.length}`),
-              dayMeals.map(m => React.createElement(MealCard, { key: m.id, meal: m, onDelete: id => onDeleteMeal(dateKey, id) }))
-            )
-          : React.createElement('div', { style: { margin: '0 16px', background: '#f9fafb', borderRadius: 24, padding: 32, textAlign: 'center' } },
-              React.createElement('div', { style: { fontSize: 36, marginBottom: 8 } }, '🍽️'),
-              React.createElement('div', { style: { color: '#9ca3af', fontSize: 13 } }, 'No meals logged yet.'),
-              React.createElement('div', { style: { color: '#d1d5db', fontSize: 11, marginTop: 4 } }, 'Tap + to add your first meal')
-            )
-      ),
-
-      showForm && React.createElement(CameraCapture, {
-        allMeals: meals,
-        onAdd: meal => { handleMealAdd(meal); setShowForm(false); },
-        onCancel: () => setShowForm(false)
-      })
+  return React.createElement('div', { style: { position: 'relative', height: '100%', overflow: 'hidden', background: '#6E4A2B' } },
+    // Dining-scene backdrop (fixed; the cream panel scrolls over it).
+    React.createElement('div', { style: { position: 'absolute', inset: 0, backgroundImage: "url('/assets/meals-bg.jpg')", backgroundSize: 'cover', backgroundPosition: 'center top', zIndex: 0 } }),
+    React.createElement('div', { style: { position: 'absolute', inset: 0, overflowY: 'auto', zIndex: 1 } },
+      React.createElement('div', { style: { height: '43vh' } }),   // reveal the scene (incl. the table of food) above the panel
+      // Panel fills from the reveal to well past the bottom, so scrolling only ever shows cream — never the scene behind.
+      React.createElement('div', { style: { minHeight: 'calc(100vh - 43vh)', background: MEALS_PANEL, borderTopLeftRadius: 28, borderTopRightRadius: 28, boxShadow: '0 -6px 20px rgba(0,0,0,0.22)', padding: '22px 16px 130px' } },
+        // Header
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 8 } },
+          React.createElement(Icon, { name: 'UtensilsCrossed', size: 22, color: MEALS_GREEN }),
+          React.createElement('span', { style: { fontFamily: PIXEL, fontWeight: 700, fontSize: 24, letterSpacing: '0.03em', color: MEALS_GREEN } }, 'MEALS COLLECTED')),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px', marginBottom: 18 } },
+          dashLine(),
+          React.createElement('span', { style: { fontFamily: PIXEL, fontSize: 13, color: THEME.green, whiteSpace: 'nowrap' } }, collected.length + ' collected'),
+          dashLine()),
+        // Card grid
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 } },
+          slots.map((m, i) => m
+            ? React.createElement(MealCollectCard, { key: m.id || i, meal: m, onOpen: onOpenMeal, onLog: onLogMeal })
+            : React.createElement(EmptyMealCard, { key: 'e' + i })))
+      )
     )
   );
 }
@@ -1451,6 +1673,28 @@ function OnboardingSheet({ onComplete, onSkip, onCancel, initialProfile = null, 
   );
 }
 
+// ─── Bottom navigation ────────────────────────────────────────────────────────
+function BottomNav({ page, onHome, onMeals, onProgress, onAdd, onMore }) {
+  const tabs = [
+    { key: 'home',     label: 'HOME',     icon: 'Home',            on: onHome,     active: page === 'home' },
+    { key: 'meals',    label: 'MEALS',    icon: 'UtensilsCrossed', on: onMeals,    active: page === 'meals' },
+    { key: 'progress', label: 'PROGRESS', icon: 'BarChart3',       on: onProgress, active: page === 'analytics' },
+    { key: 'add',      label: 'ADD',      icon: 'Plus',            on: onAdd,      active: false },
+    { key: 'more',     label: 'MORE',     icon: 'Menu',            on: onMore,     active: false },
+  ];
+  return React.createElement('div', {
+    style: { position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 40, background: THEME.greenDk, borderTopLeftRadius: 20, borderTopRightRadius: 20, display: 'flex', padding: '10px 8px calc(12px + env(safe-area-inset-bottom))', boxShadow: '0 -4px 16px rgba(0,0,0,0.15)' }
+  },
+    tabs.map(t => React.createElement('button', {
+      key: t.key, onClick: t.on,
+      style: { flex: 1, background: 'none', border: 'none', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '4px 0' }
+    },
+      React.createElement(Icon, { name: t.icon, size: 22, color: t.active ? THEME.gold : '#9FB08F' }),
+      React.createElement('span', { style: pixelLabel({ fontSize: 9, color: t.active ? THEME.gold : '#9FB08F' }) }, t.label)
+    ))
+  );
+}
+
 // ─── Root App ─────────────────────────────────────────────────────────────────
 function App() {
   const [page, setPage]               = useState('home');
@@ -1458,6 +1702,11 @@ function App() {
   const [meals, setMeals]             = useState(() => storageGet(MEALS_KEY) || {});
   const [goals, setGoals]             = useState(() => storageGet(GOALS_KEY) || DEFAULT_GOALS);
   const [profile, setProfile]         = useState(() => storageGet(PROFILE_KEY) || null);
+  const [game, setGame]               = useState(() => storageGet(GAME_KEY) || seedGame(storageGet(MEALS_KEY) || {}));
+  const [detailMeal, setDetailMeal]   = useState(null);
+  const [relogMeal, setRelogMeal]     = useState(null);
+  const [justFed, setJustFed]         = useState(false);
+  const fedTimerRef                   = useRef(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showCamera, setShowCamera]   = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -1471,7 +1720,7 @@ function App() {
   const spritesRef = useRef(sprites);
 
   // Keep latestRef always current — read inside the debounced save to avoid stale closures
-  useEffect(() => { latestRef.current = { meals, goals, profile, user }; });
+  useEffect(() => { latestRef.current = { meals, goals, profile, game, user }; });
 
   // Sprite store: deduped base64 keyed by id, kept OUT of the meals doc (its own Firestore subcollection).
   const addSprite = useCallback((id, b64) => {
@@ -1530,6 +1779,8 @@ function App() {
           setMeals(d.meals);
           storageSet(MEALS_KEY, d.meals);
         }
+        if (d.game) { setGame(d.game); storageSet(GAME_KEY, d.game); }
+        else if (d.meals) { const g = seedGame(d.meals); setGame(g); storageSet(GAME_KEY, g); }
       }
       // Load the sprite subcollection into the store (kept out of the main doc).
       const sprSnap = await ref.collection('sprites').get();
@@ -1546,10 +1797,10 @@ function App() {
   function scheduleFirestoreSave() {
     clearTimeout(firestoreSaveRef.current);
     firestoreSaveRef.current = setTimeout(async () => {
-      const { meals, goals, profile, user: u } = latestRef.current || {};
+      const { meals, goals, profile, game, user: u } = latestRef.current || {};
       if (!u || !isFirebaseConfigured()) return;
       try {
-        await firebase.firestore().collection('users').doc(u.uid).set({ meals, goals, profile: profile || null });
+        await firebase.firestore().collection('users').doc(u.uid).set({ meals, goals, profile: profile || null, game: game || null });
       } catch(e) { console.error('[Firestore] Save failed:', e); }
     }, 1500);
   }
@@ -1558,9 +1809,24 @@ function App() {
   useEffect(() => { storageSet(MEALS_KEY, meals); scheduleFirestoreSave(); }, [meals]);
   useEffect(() => { storageSet(GOALS_KEY, goals); scheduleFirestoreSave(); }, [goals]);
   useEffect(() => { storageSet(PROFILE_KEY, profile); scheduleFirestoreSave(); }, [profile]);
+  useEffect(() => { storageSet(GAME_KEY, game); scheduleFirestoreSave(); }, [game]);
 
   function addMeal(dateKey, meal) {
-    setMeals(prev => ({ ...prev, [dateKey]: [...(prev[dateKey] || []), meal] }));
+    const m = { ...meal, loggedAt: meal.loggedAt || Date.now() };
+
+    // Would this meal push today's total across the calorie goal? (award a bonus if so)
+    const goalCals = goals.calories || (goals.protein * 4 + goals.carbs * 4 + goals.fat * 9);
+    const dayCals  = (meals[dateKey] || []).reduce((s, x) => s + (Number(x.calories) || 0), 0);
+    const mealCals = m.calories || calcCals(m.protein, m.carbs, m.fat);
+    const hitsGoal = isSameDay(new Date(dateKey), today()) && goalCals > 0 && dayCals < goalCals && (dayCals + mealCals) >= goalCals;
+
+    setMeals(prev => ({ ...prev, [dateKey]: [...(prev[dateKey] || []), m] }));
+    setGame(prev => applyRewards(prev, XP_PER_MEAL + (hitsGoal ? GOAL_XP_BONUS : 0), COINS_PER_MEAL + (hitsGoal ? GOAL_COIN_BONUS : 0)));
+
+    // Trigger the eating animation on the home scene for a few seconds.
+    clearTimeout(fedTimerRef.current);
+    setJustFed(true);
+    fedTimerRef.current = setTimeout(() => setJustFed(false), 3500);
   }
 
   function deleteMeal(dateKey, id) {
@@ -1636,45 +1902,46 @@ function App() {
 
   return (
     React.createElement(SpriteCtx.Provider, { value: { resolve: resolveSprite, add: addSprite } },
-    React.createElement('div', { className: 'relative w-full h-screen bg-gray-50 flex flex-col overflow-hidden' },
+    React.createElement('div', { style: { position: 'relative', width: '100%', height: '100vh', background: THEME.creamHi, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
 
       // Pages
-      React.createElement('div', { className: 'flex-1 overflow-hidden' },
+      React.createElement('div', { style: { flex: 1, overflow: 'hidden' } },
         page === 'home'
           ? React.createElement(HomePage, {
-              meals, goals,
-              onAddMeal: addMeal,
-              onDeleteMeal: deleteMeal,
-              selectedDate,
-              onDateChange: setSelectedDate,
+              meals, goals, game, justFed,
+              onOpenMeal: setDetailMeal,
               onOpenSettings: () => setShowSettings(true),
+              onGoProgress: () => setPage('analytics'),
+              onGoMeals: () => setPage('meals'),
             })
+          : page === 'meals'
+          ? React.createElement(MealsPage, { meals, onOpenMeal: setDetailMeal, onLogMeal: setRelogMeal })
           : React.createElement(AnalyticsPage, { meals, goals })
       ),
 
-      // Bottom nav
-      React.createElement('div', { className: 'absolute bottom-6 left-0 right-0 flex justify-center px-4 z-20' },
-        React.createElement('div', { className: 'bg-white rounded-full shadow-lg px-6 py-3 flex items-center gap-6' },
-          React.createElement('button', {
-            onClick: () => setPage('home'),
-            className: `flex flex-col items-center gap-0.5 ${page === 'home' ? 'text-gray-900' : 'text-gray-300'}`
-          }, React.createElement(Icon, { name: 'Home', size: 22, color: page === 'home' ? '#111' : '#d1d5db' })),
-          React.createElement('button', {
-            onClick: () => setPage('analytics'),
-            className: `flex flex-col items-center gap-0.5 ${page === 'analytics' ? 'text-gray-900' : 'text-gray-300'}`
-          }, React.createElement(Icon, { name: 'BarChart3', size: 22, color: page === 'analytics' ? '#111' : '#d1d5db' }))
-        )
-      ),
+      // Bottom nav — Home · Meals · Progress · Add · More
+      React.createElement(BottomNav, {
+        page,
+        onHome:     () => setPage('home'),
+        onMeals:    () => setPage('meals'),
+        onProgress: () => setPage('analytics'),
+        onAdd:      () => setShowCamera(true),
+        onMore:     () => setShowSettings(true),
+      }),
 
-      // Floating + button
-      React.createElement('button', {
-        onClick: () => { setPage('home'); setShowCamera(true); },
-        className: 'absolute bottom-4 right-4 z-30 w-14 h-14 bg-gray-900 rounded-full shadow-xl flex items-center justify-center hover:bg-gray-700 transition-colors'
-      }, React.createElement(Icon, { name: 'Plus', size: 26, color: 'white' })),
+      detailMeal && React.createElement(MealDetail, { meal: detailMeal, onClose: () => setDetailMeal(null) }),
+
+      // Re-log a past meal: open the entry form pre-filled with its macros; reuse its sprite on add.
+      relogMeal && React.createElement(MealForm, {
+        allMeals: meals,
+        prefill: relogMeal,
+        onAdd: meal => { addMeal(toDateKey(today()), { ...meal, spriteId: relogMeal.spriteId }); setRelogMeal(null); setPage('home'); },
+        onCancel: () => setRelogMeal(null)
+      }),
 
       showCamera && React.createElement(CameraCapture, {
         allMeals: meals,
-        onAdd: meal => { addMeal(toDateKey(selectedDate), meal); setShowCamera(false); },
+        onAdd: meal => { addMeal(toDateKey(today()), meal); setShowCamera(false); setPage('home'); },
         onCancel: () => setShowCamera(false)
       }),
 
