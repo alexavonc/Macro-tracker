@@ -429,10 +429,15 @@ function hashImage(str) {
   return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
 }
 
+// The image call takes ~15-20s. On a phone that whole window is fragile — a screen
+// lock, an app switch, or a brief network drop aborts the in-flight request. So each
+// attempt gets a generous timeout (an AbortController, since fetch has none of its own)
+// and we retry once before giving up. Returns {full, thumb}, or null after both attempts
+// fail — callers save the meal either way (and stash a photo so it can be regenerated).
 async function generatePixelSprite(photoDataUrl, foodName) {
-  try {
-    const blob = await (await fetch(photoDataUrl)).blob();
-    const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+  const blob = await (await fetch(photoDataUrl)).blob();
+  const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+  const buildForm = () => {
     const form = new FormData();
     form.append('model', 'gpt-image-1-mini');
     form.append('image', blob, `food.${ext}`);
@@ -442,18 +447,49 @@ async function generatePixelSprite(photoDataUrl, foodName) {
     form.append('background', 'transparent');
     form.append('output_format', 'png');
     form.append('n', '1');
-    const res = await authedFetch('/api/openai-image', { method: 'POST', body: form });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    const b64 = data.data?.[0]?.b64_json;
-    if (!b64) throw new Error('No image returned');
-    const full = `data:image/png;base64,${b64}`;          // high-res, shown on the digest flip
-    const thumb = await downscaleToSprite(full, 256);      // crisp, deduped in the sprite store
-    return { full, thumb };
-  } catch (e) {
-    console.error('[pixel sprite]', e);
-    return null;
+    return form;
+  };
+  const ATTEMPTS = 2, TIMEOUT_MS = 45000;
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    try {
+      const res = await authedFetch('/api/openai-image', { method: 'POST', body: buildForm(), signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      const data = await res.json();
+      const b64 = data.data?.[0]?.b64_json;
+      if (!b64) throw new Error('No image in response');
+      const full = `data:image/png;base64,${b64}`;          // high-res, shown on the digest flip
+      const thumb = await downscaleToSprite(full, 256);      // crisp, deduped in the sprite store
+      return { full, thumb };
+    } catch (e) {
+      clearTimeout(timer);
+      const timedOut = e.name === 'AbortError';
+      console.error(`[pixel sprite] attempt ${attempt}/${ATTEMPTS} failed${timedOut ? ' (timeout)' : ''}:`, e.message || e);
+      if (attempt === ATTEMPTS) return null;
+    }
   }
+  return null;
+}
+
+// A small JPEG of the source photo, stashed on a meal whose sprite failed so the pixel
+// art can be regenerated later without re-scanning. Kept tiny and local-only (stripped
+// from the Firestore payload) to stay well clear of the 1 MiB document limit.
+function compactPhoto(dataUrl, size = 320) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, size / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      try { resolve(canvas.toDataURL('image/jpeg', 0.6)); } catch (e) { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
 }
 
 // ─── Digest overlay — full-screen "digesting" sequence for a scanned meal ──────
@@ -462,20 +498,28 @@ async function generatePixelSprite(photoDataUrl, foodName) {
 // onDone(sprite|null) fires at the end; the caller adds the meal there.
 function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
   const [pct, setPct]       = useState(0);
-  const [phase, setPhase]   = useState('progress');  // progress | flip | bites | done
+  const [phase, setPhase]   = useState('progress');  // progress | flip | done | failed
   const [sprite, setSprite] = useState(null);
   const spriteRef   = useRef(null);
   const resolvedRef = useRef(false);
+  const runIdRef    = useRef(0);
 
-  // Kick off generation (or cached reuse) once.
-  useEffect(() => {
-    let alive = true;
+  // (Re)start generation. A run-id guards against a stale attempt resolving after a retry.
+  const runGen = useCallback(() => {
+    const runId = ++runIdRef.current;
+    resolvedRef.current = false;
+    spriteRef.current = null;
+    setSprite(null);
+    setPct(0);
+    setPhase('progress');
     Promise.resolve().then(makeSprite)
-      .then(s => { if (alive) { spriteRef.current = s || null; setSprite(s || null); } })
-      .catch(() => { if (alive) { spriteRef.current = null; setSprite(null); } })
-      .finally(() => { if (alive) resolvedRef.current = true; });
-    return () => { alive = false; };
-  }, []);
+      .then(s => { if (runId === runIdRef.current) { spriteRef.current = s || null; setSprite(s || null); } })
+      .catch(() => { if (runId === runIdRef.current) { spriteRef.current = null; setSprite(null); } })
+      .finally(() => { if (runId === runIdRef.current) resolvedRef.current = true; });
+  }, [makeSprite]);
+
+  // Kick off generation (or cached reuse) once on mount.
+  useEffect(() => { runGen(); }, []);
 
   // Ring fill: ease toward 0.9 while the sprite is pending, then snap to 1 once resolved.
   useEffect(() => {
@@ -493,14 +537,15 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
     return () => cancelAnimationFrame(raf);
   }, [phase]);
 
-  // Advance out of progress once the ring is full and the sprite has resolved.
+  // Advance out of progress once the ring is full and generation resolved.
+  // Success flips to the sprite; failure stops on a card that waits for the user.
   useEffect(() => {
     if (phase === 'progress' && resolvedRef.current && pct >= 1) {
-      setPhase(spriteRef.current ? 'flip' : 'done');
+      setPhase(spriteRef.current ? 'flip' : 'failed');
     }
   }, [pct, phase]);
 
-  // Timed phase transitions.
+  // Timed phase transitions — success path only. 'failed' holds until the user chooses.
   useEffect(() => {
     if (phase === 'flip') { const t = setTimeout(() => setPhase('done'), 1500); return () => clearTimeout(t); }
     if (phase === 'done') { const t = setTimeout(() => onDone(spriteRef.current ? spriteRef.current.thumb : null), 950); return () => clearTimeout(t); }
@@ -540,8 +585,20 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
       )
     ),
     React.createElement('div', { style: { textAlign: 'center' } },
-      React.createElement('div', { style: { fontSize: 22, fontWeight: 900, color: phase === 'done' ? (sprite ? '#16a34a' : '#6b7280') : '#111' } }, phase === 'done' ? (sprite ? 'Digested!' : 'Saved — no art') : 'Digesting…'),
-      React.createElement('div', { style: { fontSize: 13, color: '#9ca3af', marginTop: 4 } }, foodName || '')
+      React.createElement('div', { style: { fontSize: 22, fontWeight: 900, color: phase === 'failed' ? '#dc2626' : (phase === 'done' ? '#16a34a' : '#111') } },
+        phase === 'failed' ? 'Couldn’t draw this one' : (phase === 'done' ? 'Digested!' : 'Digesting…')),
+      React.createElement('div', { style: { fontSize: 13, color: '#9ca3af', marginTop: 4 } },
+        phase === 'failed' ? 'The art didn’t generate — your meal is still saved.' : (foodName || ''))
+    ),
+    phase === 'failed' && React.createElement('div', { style: { display: 'flex', gap: 12 } },
+      React.createElement('button', {
+        onClick: runGen,
+        style: { background: '#16a34a', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 24px', fontSize: 15, fontWeight: 800, cursor: 'pointer' }
+      }, 'Try again'),
+      React.createElement('button', {
+        onClick: () => onDone(null),
+        style: { background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 12, padding: '11px 24px', fontSize: 15, fontWeight: 700, cursor: 'pointer' }
+      }, 'Save without art')
     )
   );
 }
@@ -663,7 +720,12 @@ function MealForm({ allMeals, onAdd, onCancel, prefill = null, capturedImage = n
       photo: digest.photo,
       foodName: digest.foodName,
       makeSprite: () => digest.cachedSprite ? Promise.resolve({ full: digest.cachedSprite, thumb: digest.cachedSprite }) : generatePixelSprite(digest.photo, digest.foodName),
-      onDone: sprite => { if (sprite) addSprite(digest.spriteId, sprite); onAdd(sprite ? { ...digest.base, spriteId: digest.spriteId } : digest.base); }
+      onDone: async sprite => {
+        if (sprite) { addSprite(digest.spriteId, sprite); onAdd({ ...digest.base, spriteId: digest.spriteId }); return; }
+        // No art — keep a small photo on the meal so it can be regenerated later without re-scanning.
+        const pendingPhoto = await compactPhoto(digest.photo);
+        onAdd(pendingPhoto ? { ...digest.base, pendingPhoto } : digest.base);
+      }
     }),
     React.createElement('div', { className: 'fixed inset-0 z-50 flex items-end justify-center' },
       React.createElement('div', { className: 'absolute inset-0 bg-black/40', onClick: onCancel }),
@@ -1270,11 +1332,25 @@ function HomePage({ meals, goals, game, justFed, onOpenMeal, onOpenSettings, onG
 }
 
 // ─── Meal Detail — full-screen sprite + macros (reuses the digest reveal look) ─
-function MealDetail({ meal, onClose }) {
-  const { resolve } = React.useContext(SpriteCtx);
+function MealDetail({ meal, onClose, onUpdateMeal }) {
+  const { resolve, add: addSprite } = React.useContext(SpriteCtx);
+  const [regenBusy, setRegenBusy] = useState(false);
+  const [regenErr, setRegenErr]   = useState('');
   if (!meal) return null;
   const src  = resolve(meal);
   const cals = meal.calories || calcCals(meal.protein, meal.carbs, meal.fat);
+  const canRegen = !src && !!meal.pendingPhoto;
+
+  async function regenerate() {
+    if (!meal.pendingPhoto || regenBusy) return;
+    setRegenBusy(true); setRegenErr('');
+    const sprite = await generatePixelSprite(meal.pendingPhoto, meal.name);
+    setRegenBusy(false);
+    if (!sprite) { setRegenErr('Still couldn’t generate — try again.'); return; }
+    const spriteId = meal.spriteId || meal.imageHash || String(meal.id);
+    addSprite(spriteId, sprite);
+    onUpdateMeal && onUpdateMeal(meal.id, { spriteId, pendingPhoto: undefined });
+  }
 
   const macroCol = (label, val, color, tint) => React.createElement('div', { style: { flex: 1, textAlign: 'center' } },
     React.createElement('div', { style: { width: 34, height: 34, borderRadius: 10, background: tint, margin: '0 auto 8px', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
@@ -1298,6 +1374,12 @@ function MealDetail({ meal, onClose }) {
       React.createElement('div', { style: { textAlign: 'center' } },
         React.createElement('div', { style: { fontSize: 24, fontWeight: 800, color: THEME.ink, marginBottom: 4, maxWidth: 320 } }, meal.name || 'Meal'),
         meal.serving && React.createElement('div', { style: { fontSize: 14, color: THEME.sub } }, meal.serving)),
+      canRegen && React.createElement('div', { style: { textAlign: 'center' } },
+        React.createElement('button', {
+          onClick: regenerate, disabled: regenBusy,
+          style: { display: 'inline-flex', alignItems: 'center', gap: 8, background: regenBusy ? '#e5e7eb' : THEME.green, color: regenBusy ? '#6b7280' : '#fff', border: 'none', borderRadius: 12, padding: '10px 20px', fontSize: 14, fontWeight: 800, cursor: regenBusy ? 'default' : 'pointer' }
+        }, React.createElement(Icon, { name: 'Sparkles', size: 16, color: regenBusy ? '#6b7280' : '#fff' }), regenBusy ? 'Generating…' : 'Generate pixel art'),
+        regenErr && React.createElement('div', { style: { fontSize: 12, color: '#dc2626', marginTop: 6 } }, regenErr)),
       React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 6 } },
         React.createElement('span', { style: { fontSize: 46, fontWeight: 900, color: THEME.green, letterSpacing: '-0.02em' } }, cals.toLocaleString()),
         React.createElement('span', { style: pixelLabel({ fontSize: 14, color: THEME.sub }) }, 'KCAL'))
@@ -1799,8 +1881,14 @@ function App() {
     firestoreSaveRef.current = setTimeout(async () => {
       const { meals, goals, profile, game, user: u } = latestRef.current || {};
       if (!u || !isFirebaseConfigured()) return;
+      // Strip pendingPhoto (a local-only regeneration fallback) so it never counts against
+      // the 1 MiB document limit — the sprite itself lives in its own subcollection.
+      const cleanMeals = {};
+      for (const [k, arr] of Object.entries(meals || {})) {
+        cleanMeals[k] = (arr || []).map(({ pendingPhoto, ...rest }) => rest);
+      }
       try {
-        await firebase.firestore().collection('users').doc(u.uid).set({ meals, goals, profile: profile || null, game: game || null });
+        await firebase.firestore().collection('users').doc(u.uid).set({ meals: cleanMeals, goals, profile: profile || null, game: game || null });
       } catch(e) { console.error('[Firestore] Save failed:', e); }
     }, 1500);
   }
@@ -1831,6 +1919,17 @@ function App() {
 
   function deleteMeal(dateKey, id) {
     setMeals(prev => ({ ...prev, [dateKey]: (prev[dateKey] || []).filter(m => m.id !== id) }));
+  }
+
+  // Patch a meal by id across every day bucket. Also updates the open detail view so a
+  // just-regenerated sprite shows immediately (resolveSprite keys off the meal's spriteId).
+  function updateMeal(id, patch) {
+    setMeals(prev => {
+      const next = {};
+      for (const [k, arr] of Object.entries(prev)) next[k] = arr.map(m => m.id === id ? { ...m, ...patch } : m);
+      return next;
+    });
+    setDetailMeal(dm => (dm && dm.id === id ? { ...dm, ...patch } : dm));
   }
 
   async function handleSignIn() {
@@ -1929,7 +2028,7 @@ function App() {
         onMore:     () => setShowSettings(true),
       }),
 
-      detailMeal && React.createElement(MealDetail, { meal: detailMeal, onClose: () => setDetailMeal(null) }),
+      detailMeal && React.createElement(MealDetail, { meal: detailMeal, onClose: () => setDetailMeal(null), onUpdateMeal: updateMeal }),
 
       // Re-log a past meal: open the entry form pre-filled with its macros; reuse its sprite on add.
       relogMeal && React.createElement(MealForm, {
