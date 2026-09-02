@@ -5,7 +5,6 @@ const MEALS_KEY = 'macro-tracker-meals';
 const GOALS_KEY = 'macro-tracker-goals';
 const PROFILE_KEY = 'macro-tracker-profile';
 const SPRITES_KEY = 'macro-tracker-sprites';
-const CHARACTER_KEY = 'macro-tracker-character';   // custom companion (auto-cropped pixel frame)
 // profile = { units:'metric'|'imperial', heightCm, weightKg, age, sex:'male'|'female',
 //             activity:'sedentary'|'light'|'moderate'|'active'|'veryActive',
 //             goalDir:'lose'|'maintain'|'gain' }  — null until onboarding (A3) completes
@@ -518,119 +517,6 @@ function compactPhoto(dataUrl, size = 320) {
     img.onerror = () => resolve(null);
     img.src = dataUrl;
   });
-}
-
-// ─── Companion character from a photo ─────────────────────────────────────────
-// Turn an uploaded photo into a single, centered, transparent-background pixel-art
-// character. One figure per image keeps auto-cropping trivial (an alpha bounding box)
-// and sidesteps the grid-alignment problem a full sprite sheet would create.
-const CHARACTER_PROMPT = `Turn the person in this photo into a cute, friendly full-body pixel-art game character — a cozy farming/RPG style companion mascot.
-Front-facing, standing in a neutral idle pose, arms relaxed at the sides, both feet visible.
-Chunky clean pixels, a limited palette, flat shading, slightly chibi proportions (larger head, smaller body).
-Preserve their recognizable features: hair style and color, skin tone, clothing colors, and any glasses or head covering.
-Center the single character on a fully transparent background with a small margin all around.
-No text, no ground line, no drop shadow, no extra objects — just the one character.`;
-
-// Crop a transparent PNG down to its figure (alpha bounding box) with a little margin,
-// then scale to a compact height. Returns a data: PNG URL. Falls back to the input if the
-// canvas can't be read (tainted) or nothing opaque is found.
-function autoCropSprite(pngDataUrl, outH = 320) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const W = img.width, H = img.height;
-      const c = document.createElement('canvas'); c.width = W; c.height = H;
-      const ctx = c.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      let data;
-      try { data = ctx.getImageData(0, 0, W, H).data; } catch (e) { resolve(pngDataUrl); return; }
-      const A = 24; // alpha threshold
-      let minX = W, minY = H, maxX = 0, maxY = 0, found = false;
-      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-        if (data[(y * W + x) * 4 + 3] > A) { found = true; if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
-      }
-      if (!found) { resolve(pngDataUrl); return; }
-      const pad = Math.round(Math.max(maxX - minX, maxY - minY) * 0.04);
-      minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
-      maxX = Math.min(W - 1, maxX + pad); maxY = Math.min(H - 1, maxY + pad);
-      const cw = maxX - minX + 1, ch = maxY - minY + 1;
-      const scale = outH / ch;
-      const ow = Math.max(1, Math.round(cw * scale)), oh = Math.max(1, Math.round(ch * scale));
-      const out = document.createElement('canvas'); out.width = ow; out.height = oh;
-      const octx = out.getContext('2d');
-      octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = 'high';
-      octx.drawImage(img, minX, minY, cw, ch, 0, 0, ow, oh);
-      resolve(out.toDataURL('image/png'));
-    };
-    img.onerror = () => reject(new Error('Generated image could not be decoded'));
-    img.src = pngDataUrl;
-  });
-}
-
-// Generate the neutral companion frame from an uploaded photo (retry + timeout, like the
-// sprite path). Returns an auto-cropped data: PNG URL, or throws with a readable reason.
-async function generateCharacterFrame(photoDataUrl) {
-  const normalized = await normalizeForEdit(photoDataUrl, 768);
-  const { blob, ext } = normalized || await (async () => { const b = await (await fetch(photoDataUrl)).blob(); return { blob: b, ext: b.type === 'image/png' ? 'png' : 'jpg' }; })();
-  const buildForm = () => {
-    const form = new FormData();
-    form.append('model', 'gpt-image-1-mini');
-    form.append('image', blob, `me.${ext}`);
-    form.append('prompt', CHARACTER_PROMPT);
-    form.append('size', '1024x1024');
-    form.append('quality', 'medium');
-    form.append('background', 'transparent');
-    form.append('output_format', 'png');
-    form.append('n', '1');
-    return form;
-  };
-  const ATTEMPTS = 2, TIMEOUT_MS = 60000;
-  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-    try {
-      const res = await authedFetch('/api/openai-image', { method: 'POST', body: buildForm(), signal: ctrl.signal });
-      clearTimeout(timer);
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-      const data = await res.json();
-      const b64 = data.data?.[0]?.b64_json;
-      if (!b64) throw new Error('No image in response');
-      return await autoCropSprite(`data:image/png;base64,${b64}`);
-    } catch (e) {
-      clearTimeout(timer);
-      const msg = e.name === 'AbortError' ? `Timed out after ${TIMEOUT_MS / 1000}s — the connection may be slow.` : (e.message || String(e));
-      console.error(`[character] attempt ${attempt}/${ATTEMPTS} failed:`, msg);
-      if (attempt === ATTEMPTS) throw new Error(msg);
-    }
-  }
-  throw new Error('Character generation failed.');
-}
-
-// Render a single custom companion frame with procedural motion — bob/breathe when idle,
-// a livelier hop when happy, a squash on eat, a shake when angry. One frame + code-driven
-// motion is what lets a user's photo become the pet without a full multi-pose sprite sheet.
-function CustomPet({ image, state = 'idle', size = 160 }) {
-  const wrapRef = useRef(null);
-  const animRef = useRef(null);
-  useEffect(() => {
-    const el = wrapRef.current; if (!el) return;
-    if (animRef.current) animRef.current.cancel();
-    const specs = {
-      idle:  { frames: [{ transform: 'translateY(0) scale(1,1)' }, { transform: 'translateY(-4px) scale(1.015,0.99)' }, { transform: 'translateY(0) scale(1,1)' }], opts: { duration: 2600, iterations: Infinity, easing: 'ease-in-out' } },
-      happy: { frames: [{ transform: 'translateY(0) scale(1,1)' }, { transform: 'translateY(-10px) scale(1.03,0.97)' }, { transform: 'translateY(0) scale(1,1)' }], opts: { duration: 900, iterations: Infinity, easing: 'ease-in-out' } },
-      eat:   { frames: [{ transform: 'scale(1,1)' }, { transform: 'scale(1.06,0.92) translateY(4px)' }, { transform: 'scale(0.97,1.04)' }, { transform: 'scale(1,1)' }], opts: { duration: 520, iterations: Infinity, easing: 'ease-in-out' } },
-      angry: { frames: [{ transform: 'translateX(-3px)' }, { transform: 'translateX(3px)' }, { transform: 'translateX(-2px)' }, { transform: 'translateX(0)' }], opts: { duration: 240, iterations: Infinity, easing: 'ease-in-out' } },
-    };
-    const s = specs[state] || specs.idle;
-    try { animRef.current = el.animate(s.frames, s.opts); } catch (e) { /* WAAPI unavailable — static frame */ }
-    return () => { if (animRef.current) animRef.current.cancel(); };
-  }, [state]);
-  return React.createElement('div', {
-    ref: wrapRef,
-    style: { width: size, height: size, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', transformOrigin: 'center bottom', filter: state === 'angry' ? 'saturate(1.25)' : 'none' }
-  },
-    React.createElement('img', { src: image, alt: '', style: { maxWidth: '100%', maxHeight: '100%', imageRendering: 'pixelated', objectFit: 'contain', display: 'block' } })
-  );
 }
 
 // ─── Digest overlay — full-screen "digesting" sequence for a scanned meal ──────
@@ -1159,7 +1045,7 @@ function GoogleIcon({ size = 18 }) {
 }
 
 // ─── Settings Sheet ───────────────────────────────────────────────────────────
-function SettingsSheet({ user, goals, onGoalsChange, profile, hasCharacter, onCreateCharacter, onEditProfile, onSignIn, onSignOut, onClose }) {
+function SettingsSheet({ user, goals, onGoalsChange, profile, onEditProfile, onSignIn, onSignOut, onClose }) {
   const avatar = user?.photoURL
     ? React.createElement('img', { src: user.photoURL, alt: '', style: { width: 44, height: 44, borderRadius: '50%', border: '2px solid white', boxShadow: '0 1px 4px rgba(0,0,0,.12)', flexShrink: 0 } })
     : React.createElement('div', { style: { width: 44, height: 44, borderRadius: '50%', background: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: '#16a34a', flexShrink: 0 } },
@@ -1219,19 +1105,6 @@ function SettingsSheet({ user, goals, onGoalsChange, profile, hasCharacter, onCr
               ? `${Math.round(profile.weightKg)} kg · ${Math.round(profile.heightCm)} cm · ${profile.goalDir === 'lose' ? 'Losing' : profile.goalDir === 'gain' ? 'Gaining' : 'Maintaining'} — recalculates goals`
               : 'Calculate your targets from height, weight & activity'
           )
-        ),
-        React.createElement(Icon, { name: 'ChevronRight', size: 18, color: '#9ca3af' })
-      ),
-
-      // Companion section — create a custom pixel character from a photo
-      React.createElement('div', { style: { fontSize: 11, fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 } }, 'Companion'),
-      React.createElement('button', {
-        onClick: onCreateCharacter,
-        style: { width: '100%', background: '#f9fafb', border: '1.5px solid #e5e7eb', borderRadius: 16, padding: 14, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', textAlign: 'left' }
-      },
-        React.createElement('div', { style: { minWidth: 0 } },
-          React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: '#111' } }, hasCharacter ? 'Change your companion' : 'Make your own companion'),
-          React.createElement('div', { style: { fontSize: 12, color: '#9ca3af', marginTop: 2 } }, 'Turn a photo into your pixel-art character')
         ),
         React.createElement(Icon, { name: 'ChevronRight', size: 18, color: '#9ca3af' })
       ),
@@ -1384,7 +1257,7 @@ function MealListRow({ meal, onOpen, divider }) {
 }
 
 // ─── Home Page ────────────────────────────────────────────────────────────────
-function HomePage({ meals, goals, game, justFed, character, onOpenMeal, onOpenSettings, onGoProgress, onGoMeals }) {
+function HomePage({ meals, goals, game, justFed, onOpenMeal, onOpenSettings, onGoProgress, onGoMeals }) {
   const dayMeals = meals[toDateKey(today())] || [];
 
   const totals = dayMeals.reduce((acc, m) => ({
@@ -1448,9 +1321,7 @@ function HomePage({ meals, goals, game, justFed, character, onOpenMeal, onOpenSe
     ),
     // Character standing on the path
     React.createElement('div', { style: { position: 'absolute', top: '24%', left: '50%', transform: 'translateX(-50%)', zIndex: 1, pointerEvents: 'none' } },
-      character
-        ? React.createElement(CustomPet, { image: character, state: petState, size: 150 })
-        : React.createElement(PetCat, { state: petState, size: 150 })),
+      React.createElement(PetCat, { state: petState, size: 150 })),
 
     // ── Scrollable cards floating over the scenery ──
     React.createElement('div', { style: { position: 'absolute', inset: 0, overflowY: 'auto', zIndex: 2, paddingTop: '43vh', paddingBottom: 112 } },
@@ -1817,82 +1688,6 @@ function AnalyticsPage({ meals, goals }) {
   );
 }
 
-// ─── Companion Creator — photo → pixel character (neutral frame + procedural motion) ──
-function CharacterCreator({ current, onSave, onClose }) {
-  const [phase, setPhase] = useState('intro');   // intro | generating | preview | error
-  const [result, setResult] = useState(null);
-  const [err, setErr] = useState('');
-  const [previewState, setPreviewState] = useState('idle');
-  const lastPhotoRef = useRef(null);
-  const inputRef = useRef(null);
-
-  async function run(photoDataUrl) {
-    lastPhotoRef.current = photoDataUrl;
-    setPhase('generating'); setErr('');
-    try { setResult(await generateCharacterFrame(photoDataUrl)); setPhase('preview'); setPreviewState('idle'); }
-    catch (e) { setErr(e?.message || 'Something went wrong.'); setPhase('error'); }
-  }
-  function onFile(e) {
-    const f = e.target.files?.[0]; if (!f) { return; }
-    const fr = new FileReader(); fr.onload = () => run(fr.result); fr.readAsDataURL(f);
-    e.target.value = '';
-  }
-  const pick = () => inputRef.current && inputRef.current.click();
-
-  const bigBtn = (label, onClick, primary, disabled) => React.createElement('button', { key: label, onClick, disabled,
-    style: { border: 'none', borderRadius: 14, padding: '13px 22px', fontSize: 15, fontWeight: 800, cursor: disabled ? 'default' : 'pointer',
-      background: disabled ? '#e5e0d2' : (primary ? MEALS_GREEN : '#efe9db'), color: disabled ? '#a89f8c' : (primary ? '#fff' : THEME.ink) } }, label);
-  const stage = (children) => React.createElement('div', { style: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, padding: 24, textAlign: 'center' } }, children);
-  const preview = (img, st, boxSize, petSize) => React.createElement('div', { style: { width: boxSize, height: boxSize, background: '#EAF0E0', border: '1px solid ' + MEALS_LINE, borderRadius: 24, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', overflow: 'hidden' } },
-    React.createElement(CustomPet, { image: img, state: st, size: petSize }));
-
-  let body;
-  if (phase === 'generating') {
-    body = stage([
-      React.createElement('div', { key: 'e', style: { fontSize: 46 } }, '✨'),
-      React.createElement('div', { key: 't', style: { fontFamily: PIXEL, fontSize: 16, color: MEALS_GREEN } }, 'Drawing your character…'),
-      React.createElement('div', { key: 's', style: { fontSize: 13, color: THEME.sub, maxWidth: 260 } }, 'Turning your photo into a pixel companion. This takes about 20 seconds.'),
-    ]);
-  } else if (phase === 'preview' && result) {
-    body = stage([
-      preview(result, previewState, 220, 200),
-      React.createElement('div', { key: 'moods', style: { display: 'flex', gap: 8 } },
-        ['idle', 'happy', 'eat', 'angry'].map(s => React.createElement('button', { key: s, onClick: () => setPreviewState(s),
-          style: { border: '1px solid ' + MEALS_LINE, background: previewState === s ? MEALS_GREEN : '#efe9db', color: previewState === s ? '#fff' : THEME.sub, borderRadius: 10, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', textTransform: 'capitalize' } }, s))),
-      React.createElement('div', { key: 'hint', style: { fontSize: 13, color: THEME.sub, maxWidth: 280 } }, 'Tap a mood to preview its animation. Happy with it?'),
-      React.createElement('div', { key: 'btns', style: { display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' } },
-        bigBtn('Use this', () => onSave(result), true),
-        bigBtn('Regenerate', () => run(lastPhotoRef.current)),
-        bigBtn('Pick another', pick)),
-    ]);
-  } else if (phase === 'error') {
-    body = stage([
-      React.createElement('div', { key: 'e', style: { fontSize: 40 } }, '😕'),
-      React.createElement('div', { key: 't', style: { fontFamily: PIXEL, fontSize: 16, color: '#c0392b' } }, 'Couldn’t draw it'),
-      React.createElement('div', { key: 'm', style: { fontSize: 12, color: THEME.sub, maxWidth: 300, fontFamily: 'monospace', wordBreak: 'break-word' } }, err),
-      React.createElement('div', { key: 'btns', style: { display: 'flex', gap: 12 } },
-        bigBtn('Try again', () => (lastPhotoRef.current ? run(lastPhotoRef.current) : pick()), true),
-        bigBtn('Cancel', onClose)),
-    ]);
-  } else {
-    body = stage([
-      current ? preview(current, 'idle', 180, 168) : React.createElement('div', { key: 'ph', style: { fontSize: 64 } }, '🧑‍🎤'),
-      React.createElement('div', { key: 't', style: { fontFamily: PIXEL, fontSize: 18, color: MEALS_GREEN } }, current ? 'Update your companion' : 'Make your companion'),
-      React.createElement('div', { key: 'd', style: { fontSize: 14, color: THEME.sub, maxWidth: 300, lineHeight: 1.5 } }, 'Upload a photo and we’ll turn it into your own pixel-art character that lives on your home screen.'),
-      bigBtn('Upload a photo', pick, true),
-      current && React.createElement('button', { key: 'reset', onClick: () => onSave(null), style: { background: 'none', border: 'none', color: THEME.sub, fontSize: 13, cursor: 'pointer', textDecoration: 'underline' } }, 'Reset to default character'),
-    ]);
-  }
-
-  return React.createElement('div', { style: { position: 'fixed', inset: 0, zIndex: 90, background: THEME.creamHi, display: 'flex', flexDirection: 'column' } },
-    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '52px 20px 8px' } },
-      React.createElement('span', { style: { fontFamily: PIXEL, fontWeight: 700, fontSize: 20, color: MEALS_GREEN } }, 'YOUR COMPANION'),
-      React.createElement('button', { onClick: onClose, style: { width: 38, height: 38, borderRadius: '50%', background: '#f0ead9', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
-        React.createElement(Icon, { name: 'X', size: 20, color: THEME.ink }))),
-    React.createElement('input', { ref: inputRef, type: 'file', accept: 'image/*', onChange: onFile, style: { display: 'none' } }),
-    body);
-}
-
 // ─── Onboarding — collect body metrics, derive goals (Mifflin-St Jeor) ────────
 const ACTIVITY_OPTIONS = [
   { key: 'sedentary',  label: 'Sedentary',   hint: 'Little or no exercise' },
@@ -2082,8 +1877,6 @@ function App() {
   const [goals, setGoals]             = useState(() => storageGet(GOALS_KEY) || DEFAULT_GOALS);
   const [profile, setProfile]         = useState(() => storageGet(PROFILE_KEY) || null);
   const [game, setGame]               = useState(() => storageGet(GAME_KEY) || seedGame(storageGet(MEALS_KEY) || {}));
-  const [character, setCharacter]     = useState(() => storageGet(CHARACTER_KEY) || null);
-  const [showCharacter, setShowCharacter] = useState(false);
   const [detailMeal, setDetailMeal]   = useState(null);
   const [relogMeal, setRelogMeal]     = useState(null);
   const [justFed, setJustFed]         = useState(false);
@@ -2101,7 +1894,7 @@ function App() {
   const spritesRef = useRef(sprites);
 
   // Keep latestRef always current — read inside the debounced save to avoid stale closures
-  useEffect(() => { latestRef.current = { meals, goals, profile, game, character, user }; });
+  useEffect(() => { latestRef.current = { meals, goals, profile, game, user }; });
 
   // Sprite store: deduped base64 keyed by id, kept OUT of the meals doc (its own Firestore subcollection).
   const addSprite = useCallback((id, b64) => {
@@ -2161,7 +1954,6 @@ function App() {
           storageSet(MEALS_KEY, d.meals);
         }
         if (d.game) { setGame(d.game); storageSet(GAME_KEY, d.game); }
-        if (d.character) { setCharacter(d.character); storageSet(CHARACTER_KEY, d.character); }
         else if (d.meals) { const g = seedGame(d.meals); setGame(g); storageSet(GAME_KEY, g); }
       }
       // Load the sprite subcollection into the store (kept out of the main doc).
@@ -2179,7 +1971,7 @@ function App() {
   function scheduleFirestoreSave() {
     clearTimeout(firestoreSaveRef.current);
     firestoreSaveRef.current = setTimeout(async () => {
-      const { meals, goals, profile, game, character, user: u } = latestRef.current || {};
+      const { meals, goals, profile, game, user: u } = latestRef.current || {};
       if (!u || !isFirebaseConfigured()) return;
       // Strip pendingPhoto (a local-only regeneration fallback) so it never counts against
       // the 1 MiB document limit — the sprite itself lives in its own subcollection.
@@ -2188,7 +1980,7 @@ function App() {
         cleanMeals[k] = (arr || []).map(({ pendingPhoto, ...rest }) => rest);
       }
       try {
-        await firebase.firestore().collection('users').doc(u.uid).set({ meals: cleanMeals, goals, profile: profile || null, game: game || null, character: character || null });
+        await firebase.firestore().collection('users').doc(u.uid).set({ meals: cleanMeals, goals, profile: profile || null, game: game || null });
       } catch(e) { console.error('[Firestore] Save failed:', e); }
     }, 1500);
   }
@@ -2198,7 +1990,6 @@ function App() {
   useEffect(() => { storageSet(GOALS_KEY, goals); scheduleFirestoreSave(); }, [goals]);
   useEffect(() => { storageSet(PROFILE_KEY, profile); scheduleFirestoreSave(); }, [profile]);
   useEffect(() => { storageSet(GAME_KEY, game); scheduleFirestoreSave(); }, [game]);
-  useEffect(() => { storageSet(CHARACTER_KEY, character); scheduleFirestoreSave(); }, [character]);
 
   function addMeal(dateKey, meal) {
     const m = { ...meal, loggedAt: meal.loggedAt || Date.now() };
@@ -2308,7 +2099,7 @@ function App() {
       React.createElement('div', { style: { flex: 1, overflow: 'hidden' } },
         page === 'home'
           ? React.createElement(HomePage, {
-              meals, goals, game, justFed, character,
+              meals, goals, game, justFed,
               onOpenMeal: setDetailMeal,
               onOpenSettings: () => setShowSettings(true),
               onGoProgress: () => setPage('analytics'),
@@ -2350,18 +2141,10 @@ function App() {
         goals,
         onGoalsChange: g => setGoals(g),
         profile,
-        hasCharacter: !!character,
-        onCreateCharacter: () => { setShowSettings(false); setShowCharacter(true); },
         onEditProfile: () => setShowProfileEdit(true),
         onSignIn: handleSignIn,
         onSignOut: handleSignOut,
         onClose: () => setShowSettings(false)
-      }),
-
-      showCharacter && React.createElement(CharacterCreator, {
-        current: character,
-        onSave: url => { setCharacter(url); setShowCharacter(false); },
-        onClose: () => setShowCharacter(false)
       }),
 
       showOnboarding && React.createElement(OnboardingSheet, {
