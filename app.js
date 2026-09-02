@@ -200,6 +200,13 @@ const SPRITE_SETS = {
     bboxes: [[50,58,87,235],[192,58,86,235],[332,58,87,235],[559,80,74,182],[676,80,74,182],[784,80,77,184],[896,80,77,182],[1080,81,74,182],[1193,81,72,181],[1308,81,74,182],[1421,81,73,182],[522,331,75,176],[644,331,78,176],[775,331,76,177],[902,331,78,177],[1058,331,79,179],[1179,332,77,177],[1309,332,78,176],[1429,333,77,176],[114,562,92,181],[310,561,94,182],[493,561,98,182],[681,560,95,183],[869,560,90,183],[1051,560,89,183],[126,784,82,199],[318,782,83,201],[515,781,84,203],[727,779,126,205],[965,776,136,207],[1232,768,128,216]],
     centX: [43.7,42.4,43.3,36.5,36.6,40.2,38.9,36.4,36,36.5,36.1,36,37.8,38,39.2,38.2,37.2,39,38.4,49.8,50.7,54.1,51.9,47.5,47.2,40.8,41.3,41.6,65,69.7,62.7],
     scale: {}, maxW: 136, maxH: 235,
+    // The three idle frames redraw the curly hair differently, so alternating 0↔2 reads as a
+    // jarring hair "pop". Hold the stable base pose (0) and flash only a quick, occasional blink
+    // (1) at the ping-pong turnaround — never switch to the mismatched third pose.
+    anims: {
+      idle:  { frames: [...Array(20).fill(0), 1], fps: 10, loop: true },
+      happy: { frames: [...Array(12).fill(0), 1], fps: 10, loop: true },
+    },
   },
 };
 function resolveSpriteSet(email) { return (email && SPRITE_SETS[email]) || DEFAULT_SET; }
@@ -235,7 +242,7 @@ function PetCat({ state = 'idle', size = 160, set = DEFAULT_SET }) {
   useEffect(() => {
     if (!sprite) return;
     if (timerRef.current) clearInterval(timerRef.current);
-    const anim = ANIMATIONS[state] || ANIMATIONS.idle;
+    const anim = (set.anims && set.anims[state]) || ANIMATIONS[state] || ANIMATIONS.idle;
     frameIdxRef.current = 0;
     let dir = 1;
 
