@@ -1509,122 +1509,177 @@ function MealsPage({ meals, onOpenMeal, onLogMeal }) {
   );
 }
 
-// ─── Analytics Page ───────────────────────────────────────────────────────────
+// ─── Progress Page — scene-backdrop header, Individual / Leaderboard tabs ──────
+const PROG_RED    = '#D14B3C';   // over-goal
+const PROG_GREEN  = '#4C7B3B';   // today / on-track
+const PROG_BAR    = '#D8CBAE';   // past-day bar (tan)
+const PROG_TODAYBG = '#E7EFDD';  // today row / goal pill fill
+
+// A cream card that floats on the tan panel — the shared block for each progress section.
+function ProgressCard({ icon, title, right, children }) {
+  return React.createElement('div', { style: { background: MEALS_CARD, border: '1px solid ' + MEALS_LINE, borderRadius: 18, boxShadow: '0 2px 0 rgba(60,50,30,0.05), 0 6px 14px rgba(60,50,30,0.08)', padding: '16px 16px 18px', marginBottom: 14 } },
+    React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 14 } },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
+        React.createElement(Icon, { name: icon, size: 18, color: MEALS_GREEN }),
+        React.createElement('span', { style: pixelLabel({ fontSize: 15, color: MEALS_GREEN, letterSpacing: '0.02em' }) }, title)),
+      right || null),
+    children
+  );
+}
+
+function StatTile({ label, value, unit, foot, footColor }) {
+  return React.createElement('div', { style: { flex: 1, minWidth: 0, background: THEME.creamHi, border: '1px solid ' + MEALS_LINE, borderRadius: 14, padding: '12px 4px 10px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 } },
+    React.createElement('div', { style: pixelLabel({ fontSize: 8, color: THEME.sub, letterSpacing: '0.02em', lineHeight: 1.25, minHeight: 20, display: 'flex', alignItems: 'center', textAlign: 'center' }) }, label),
+    React.createElement('div', { style: { fontSize: 23, fontWeight: 900, color: THEME.ink, lineHeight: 1.1 } }, value),
+    unit && React.createElement('div', { style: { fontSize: 9.5, color: THEME.sub } }, unit),
+    foot && React.createElement('div', { style: { fontSize: 10, fontWeight: 700, color: footColor || THEME.sub, marginTop: 2 } }, foot)
+  );
+}
+
 function AnalyticsPage({ meals, goals }) {
-  const days = Array.from({ length: 7 }, (_, i) => addDays(today(), -(6 - i)));
+  const [tab, setTab] = useState('individual');
 
-  const dayData = days.map(d => {
-    const key = toDateKey(d);
-    const ms = meals[key] || [];
-    const totals = ms.reduce((a, m) => ({
-      protein: a.protein + (Number(m.protein) || 0),
-      carbs: a.carbs + (Number(m.carbs) || 0),
-      fat: a.fat + (Number(m.fat) || 0),
-      calories: a.calories + (Number(m.calories) || 0),
+  // Seven-day window ending `endOffset` days before today (0 = the current week, 7 = the prior).
+  const week = (endOffset) => Array.from({ length: 7 }, (_, i) => addDays(today(), -(endOffset + 6 - i)));
+  const sumDay = (d) => {
+    const ms = meals[toDateKey(d)] || [];
+    const t = ms.reduce((a, m) => ({
+      protein: a.protein + (Number(m.protein) || 0), carbs: a.carbs + (Number(m.carbs) || 0),
+      fat: a.fat + (Number(m.fat) || 0), calories: a.calories + (Number(m.calories) || 0),
     }), { protein: 0, carbs: 0, fat: 0, calories: 0 });
-    return { date: d, key, ...totals, mealCount: ms.length };
-  });
+    return { date: d, key: toDateKey(d), ...t, mealCount: ms.length };
+  };
+  const dayData = week(0).map(sumDay);
+  const prevData = week(7).map(sumDay);
 
-  const maxCals = Math.max(...dayData.map(d => d.calories), 1);
   const goalCals = goals ? (goals.calories || (goals.protein * 4 + goals.carbs * 4 + goals.fat * 9)) : 0;
-  // Scale bars against the taller of the week's peak or the daily goal, so an over-goal day reads as tall.
-  const scaleMax = Math.max(maxCals, goalCals, 1);
-  const avg = (key) => {
-    const vals = dayData.map(d => d[key]);
-    return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+  const sum = (arr, k) => arr.reduce((a, d) => a + d[k], 0);
+  const avg = (arr, k) => Math.round(sum(arr, k) / (arr.length || 1));
+  const avgCals = avg(dayData, 'calories');
+  const totalCals = Math.round(sum(dayData, 'calories'));
+  const bestDay = Math.round(Math.max(...dayData.map(d => d.calories), 0));
+  const mealsLogged = dayData.reduce((a, d) => a + d.mealCount, 0);
+  const prevAvg = avg(prevData, 'calories');
+  const pctChange = prevAvg > 0 ? Math.round(((avgCals - prevAvg) / prevAvg) * 100) : null;
+
+  // Bar-chart y-axis: round the taller of the week's peak or the daily goal up to a clean 1K step.
+  const peak = Math.max(...dayData.map(d => d.calories), goalCals, 1);
+  const yMax = Math.max(1000, Math.ceil(peak / 1000) * 1000);
+  const gridLines = []; for (let v = yMax; v >= 0; v -= 1000) gridLines.push(v);
+  const PLOT_H = 150;
+
+  const todayData = dayData[6];
+  const overToday = goalCals > 0 && todayData.calories > goalCals;
+  const goalDiff = Math.round(Math.abs(goalCals - todayData.calories));
+
+  const dayInitial = (d) => d.date.toLocaleDateString('en-US', { weekday: 'short' }).charAt(0);
+  const rowDate = (d) => d.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const numCell = (v, extra = {}) => React.createElement('td', { style: { padding: '10px 4px', textAlign: 'center', fontSize: 13, color: THEME.sub, ...extra } }, v);
+
+  // ── Individual tab body ──
+  const individual = React.createElement(React.Fragment, null,
+    // DAILY CALORIES — bar chart + range pill + goal note
+    React.createElement(ProgressCard, {
+      icon: 'Flame', title: 'DAILY CALORIES',
+      right: React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, background: THEME.creamHi, border: '1px solid ' + MEALS_LINE, borderRadius: 10, padding: '6px 10px', fontSize: 12, color: THEME.ink, fontWeight: 700, whiteSpace: 'nowrap' } },
+        'Last 7 days', React.createElement(Icon, { name: 'ChevronDown', size: 14, color: THEME.sub })),
+    },
+      React.createElement('div', { style: { display: 'flex', gap: 8 } },
+        // y-axis
+        React.createElement('div', { style: { display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: PLOT_H, width: 22, textAlign: 'right', fontSize: 10, color: THEME.sub, flexShrink: 0 } },
+          gridLines.map((v, i) => React.createElement('div', { key: i }, v >= 1000 ? (v / 1000) + 'K' : v))),
+        // plot
+        React.createElement('div', { style: { position: 'relative', flex: 1 } },
+          React.createElement('div', { style: { position: 'relative', height: PLOT_H } },
+            gridLines.map((v, i) => React.createElement('div', { key: i, style: { position: 'absolute', left: 0, right: 0, top: PLOT_H * (1 - v / yMax), borderTop: '1px dashed ' + MEALS_LINE } })),
+            React.createElement('div', { style: { position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', gap: 6 } },
+              dayData.map(d => {
+                const isToday = d.key === todayData.key;
+                const over = goalCals > 0 && d.calories > goalCals;
+                const h = d.calories > 0 ? Math.max(Math.round((d.calories / yMax) * PLOT_H), 5) : 4;
+                const color = d.calories <= 0 ? PROG_BAR : (over ? PROG_RED : (isToday ? PROG_GREEN : PROG_BAR));
+                return React.createElement('div', { key: d.key, style: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end' } },
+                  d.calories > 0 && React.createElement('div', { style: { fontSize: 10, fontWeight: 800, color: over ? PROG_RED : THEME.ink, marginBottom: 3 } }, Math.round(d.calories)),
+                  React.createElement('div', { style: { width: '100%', maxWidth: 30, height: h, background: color, borderRadius: '5px 5px 0 0' } }));
+              }))),
+          // x labels
+          React.createElement('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
+            dayData.map(d => React.createElement('div', { key: d.key, style: { flex: 1, textAlign: 'center', fontSize: 11, fontWeight: d.key === todayData.key ? 800 : 500, color: d.key === todayData.key ? PROG_GREEN : THEME.sub } }, dayInitial(d)))))),
+      goalCals > 0 && React.createElement('div', { style: { marginTop: 14, background: overToday ? '#F6E4E0' : PROG_TODAYBG, border: '1px solid ' + MEALS_LINE, borderRadius: 12, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: THEME.ink } },
+        React.createElement(Icon, { name: 'Star', size: 15, color: overToday ? PROG_RED : PROG_GREEN }),
+        React.createElement('span', null,
+          overToday ? "You’re over your goal by " : "You’re under your goal by ",
+          React.createElement('span', { style: { fontWeight: 800, color: overToday ? PROG_RED : PROG_GREEN } }, goalDiff + ' kcal'),
+          ' today', overToday ? '.' : '!'))),
+
+    // MACRO BREAKDOWN — per-day table + average row
+    React.createElement(ProgressCard, { icon: 'PieChart', title: 'MACRO BREAKDOWN' },
+      React.createElement('div', { style: { overflowX: 'auto' } },
+        React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', minWidth: 300 } },
+          React.createElement('thead', null,
+            React.createElement('tr', { style: { color: THEME.sub, borderBottom: '1px solid ' + MEALS_LINE } },
+              React.createElement('th', { style: { textAlign: 'left', padding: '0 4px 8px', fontSize: 12, fontWeight: 600 } }, 'Day'),
+              ['Protein', 'Carbs', 'Fat', 'kcal'].map(h => React.createElement('th', { key: h, style: { textAlign: 'center', padding: '0 4px 8px', fontSize: 12, fontWeight: 600 } }, h)))),
+          React.createElement('tbody', null,
+            dayData.map(d => {
+              const isToday = d.key === todayData.key;
+              const over = goalCals > 0 && d.calories > goalCals;
+              return React.createElement('tr', { key: d.key, style: { borderBottom: '1px solid ' + MEALS_LINE, background: isToday ? PROG_TODAYBG : 'transparent' } },
+                React.createElement('td', { style: { padding: '10px 4px', fontSize: 13, fontWeight: 700, color: THEME.ink } }, rowDate(d)),
+                numCell(Math.round(d.protein) + 'g'), numCell(Math.round(d.carbs) + 'g'), numCell(Math.round(d.fat) + 'g'),
+                numCell(Math.round(d.calories), { fontWeight: 800, color: over ? PROG_RED : (isToday ? PROG_GREEN : THEME.ink) }));
+            }),
+            React.createElement('tr', { style: { background: '#EDE6D6' } },
+              React.createElement('td', { style: { padding: '10px 4px', fontSize: 13, fontWeight: 800, color: THEME.ink } }, 'AVG.'),
+              numCell(avg(dayData, 'protein') + 'g', { fontWeight: 800, color: THEME.ink }),
+              numCell(avg(dayData, 'carbs') + 'g', { fontWeight: 800, color: THEME.ink }),
+              numCell(avg(dayData, 'fat') + 'g', { fontWeight: 800, color: THEME.ink }),
+              numCell(avgCals, { fontWeight: 800, color: THEME.ink })))))),
+
+    // WEEKLY SUMMARY — four stat tiles
+    React.createElement(ProgressCard, { icon: 'BarChart3', title: 'WEEKLY SUMMARY' },
+      React.createElement('div', { style: { display: 'flex', gap: 8 } },
+        React.createElement(StatTile, { label: 'AVG CALORIES', value: avgCals.toLocaleString(), unit: 'kcal/day',
+          foot: pctChange != null ? (pctChange <= 0 ? '▼ ' : '▲ ') + Math.abs(pctChange) + '% vs last week' : null,
+          footColor: pctChange != null ? (pctChange <= 0 ? PROG_GREEN : PROG_RED) : THEME.sub }),
+        React.createElement(StatTile, { label: 'TOTAL CALORIES', value: totalCals.toLocaleString(), unit: 'kcal' }),
+        React.createElement(StatTile, { label: 'BEST DAY', value: bestDay.toLocaleString(), unit: 'kcal', foot: '🔥' }),
+        React.createElement(StatTile, { label: 'MEALS LOGGED', value: String(mealsLogged), unit: 'meals', foot: '🍴' })))
+  );
+
+  // ── Leaderboard tab body (LeaderBot) — placeholder until the design lands ──
+  const leaderboard = React.createElement('div', { style: { textAlign: 'center', padding: '54px 24px', color: THEME.sub } },
+    React.createElement('div', { style: { fontSize: 52, marginBottom: 14 } }, '🏆'),
+    React.createElement('div', { style: pixelLabel({ fontSize: 17, color: MEALS_GREEN, marginBottom: 8 }) }, 'LEADERBOARD'),
+    React.createElement('div', { style: { fontSize: 13, lineHeight: 1.5, maxWidth: 260, margin: '0 auto' } }, 'LeaderBot is on the way — compete with friends and climb the ranks. Coming soon.'));
+
+  const tabBtn = (id, label, icon) => {
+    const active = tab === id;
+    return React.createElement('button', { key: id, onClick: () => setTab(id),
+      style: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 8px', borderRadius: 14, cursor: 'pointer',
+        border: '1px solid ' + MEALS_LINE, background: active ? MEALS_CARD : 'rgba(70,55,40,0.09)',
+        color: active ? MEALS_GREEN : THEME.sub, fontFamily: PIXEL, fontWeight: 700, fontSize: 14, letterSpacing: '0.03em',
+        boxShadow: active ? '0 2px 0 rgba(60,50,30,0.06)' : 'none' } },
+      React.createElement(Icon, { name: icon, size: 16, color: active ? MEALS_GREEN : THEME.sub }), label);
   };
 
-  const dayLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-  const todayIdx = days.findIndex(d => isSameDay(d, today()));
-
-  return (
-    React.createElement('div', { className: 'flex flex-col h-full' },
-      React.createElement('div', { className: 'bg-white px-4 pt-14 pb-4 border-b border-gray-100 flex-shrink-0' },
-        React.createElement('h1', { className: 'text-2xl font-black text-gray-900' }, 'Statistics'),
-        React.createElement('div', { className: 'text-sm text-gray-400' }, 'Last 7 days')
-      ),
-
-      React.createElement('div', { className: 'flex-1 overflow-y-auto px-4 pt-4 pb-32' },
-
-        // Bar chart card
-        React.createElement('div', { className: 'bg-white rounded-3xl shadow-sm p-5 mb-3' },
-          React.createElement('div', { className: 'text-sm font-semibold text-gray-700 mb-4' }, 'Daily Calories'),
-          React.createElement('div', { className: 'flex items-end gap-2 h-32' },
-            dayData.map((d, i) => {
-              const isT = isSameDay(d.date, today());
-              const over = goalCals > 0 && d.calories > goalCals;
-              // Pixel height (not %) so it renders regardless of the flex parent's resolved height.
-              const barPx = d.calories > 0 ? Math.max(Math.round((d.calories / scaleMax) * 90), 6) : 3;
-              const barBg = over ? '#ef4444' : (isT ? '#22c55e' : '#d1fae5');
-              return React.createElement('div', { key: d.key, className: 'flex-1 flex flex-col items-center gap-1' },
-                d.calories > 0 && React.createElement('div', { className: 'text-xs', style: { fontSize: 9, color: over ? '#ef4444' : '#9ca3af', fontWeight: over ? 700 : 400 } }, Math.round(d.calories)),
-                React.createElement('div', {
-                  className: 'w-full rounded-t-lg transition-all',
-                  style: { height: `${barPx}px`, backgroundColor: barBg }
-                }),
-                React.createElement('div', { className: `text-xs ${isT ? 'font-bold text-green-600' : 'text-gray-400'}` },
-                  d.date.toLocaleDateString('en-US', { weekday: 'short' }).charAt(0)
-                )
-              );
-            })
-          )
-        ),
-
-        // Macro breakdown table
-        React.createElement('div', { className: 'bg-white rounded-3xl shadow-sm p-5 mb-3 overflow-x-auto' },
-          React.createElement('div', { className: 'text-sm font-semibold text-gray-700 mb-4' }, 'Macro Breakdown'),
-          React.createElement('table', { className: 'w-full text-xs min-w-max' },
-            React.createElement('thead', null,
-              React.createElement('tr', { className: 'text-gray-400 border-b border-gray-100' },
-                React.createElement('th', { className: 'text-left py-2 font-medium' }, 'Day'),
-                React.createElement('th', { className: 'text-right py-2 font-medium' }, 'Protein'),
-                React.createElement('th', { className: 'text-right py-2 font-medium' }, 'Carbs'),
-                React.createElement('th', { className: 'text-right py-2 font-medium' }, 'Fat'),
-                React.createElement('th', { className: 'text-right py-2 font-medium' }, 'kcal')
-              )
-            ),
-            React.createElement('tbody', null,
-              dayData.map((d, i) => {
-                const isT = isSameDay(d.date, today());
-                return React.createElement('tr', { key: d.key, className: `border-b border-gray-50 ${isT ? 'bg-green-50' : ''}` },
-                  React.createElement('td', { className: 'py-2.5 font-medium text-gray-700' },
-                    d.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-                  ),
-                  React.createElement('td', { className: 'py-2.5 text-right text-gray-600' }, `${Math.round(d.protein)}g`),
-                  React.createElement('td', { className: 'py-2.5 text-right text-gray-600' }, `${Math.round(d.carbs)}g`),
-                  React.createElement('td', { className: 'py-2.5 text-right text-gray-600' }, `${Math.round(d.fat)}g`),
-                  React.createElement('td', { className: 'py-2.5 text-right font-semibold text-gray-800' }, Math.round(d.calories))
-                );
-              }),
-              // Averages row
-              React.createElement('tr', { className: 'bg-gray-50 font-semibold' },
-                React.createElement('td', { className: 'py-2.5 text-gray-700' }, 'Avg.'),
-                React.createElement('td', { className: 'py-2.5 text-right text-gray-700' }, `${avg('protein')}g`),
-                React.createElement('td', { className: 'py-2.5 text-right text-gray-700' }, `${avg('carbs')}g`),
-                React.createElement('td', { className: 'py-2.5 text-right text-gray-700' }, `${avg('fat')}g`),
-                React.createElement('td', { className: 'py-2.5 text-right text-gray-800' }, avg('calories'))
-              )
-            )
-          )
-        ),
-
-        // Weekly summary
-        React.createElement('div', { className: 'bg-white rounded-3xl shadow-sm p-5 mb-3' },
-          React.createElement('div', { className: 'text-sm font-semibold text-gray-700 mb-3' }, 'Weekly Summary'),
-          React.createElement('div', { className: 'grid grid-cols-2 gap-3' },
-            [
-              { label: 'Avg. Calories', value: `${avg('calories')} kcal` },
-              { label: 'Avg. Protein', value: `${avg('protein')}g` },
-              { label: 'Avg. Carbs', value: `${avg('carbs')}g` },
-              { label: 'Avg. Fat', value: `${avg('fat')}g` },
-            ].map(item =>
-              React.createElement('div', { key: item.label, className: 'bg-gray-50 rounded-2xl p-4' },
-                React.createElement('div', { className: 'text-xs text-gray-400 mb-1' }, item.label),
-                React.createElement('div', { className: 'text-lg font-bold text-gray-800' }, item.value)
-              )
-            )
-          )
-        )
+  return React.createElement('div', { style: { position: 'relative', height: '100%', overflow: 'hidden', background: '#4A3423' } },
+    // Journal-room backdrop (fixed; the cream panel scrolls over it).
+    React.createElement('div', { style: { position: 'absolute', inset: 0, backgroundImage: "url('/assets/progress-bg.jpg')", backgroundSize: 'cover', backgroundPosition: 'center top', zIndex: 0 } }),
+    React.createElement('div', { style: { position: 'absolute', inset: 0, overflowY: 'auto', zIndex: 1 } },
+      React.createElement('div', { style: { height: '30vh' } }),   // reveal the scene above the panel
+      React.createElement('div', { style: { minHeight: 'calc(100vh - 30vh)', background: MEALS_PANEL, borderTopLeftRadius: 28, borderTopRightRadius: 28, boxShadow: '0 -6px 20px rgba(0,0,0,0.22)', padding: '22px 16px 130px' } },
+        // Header
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 2 } },
+          React.createElement(Icon, { name: 'TrendingUp', size: 22, color: MEALS_GREEN }),
+          React.createElement('span', { style: { fontFamily: PIXEL, fontWeight: 700, fontSize: 24, letterSpacing: '0.03em', color: MEALS_GREEN } }, 'PROGRESS')),
+        React.createElement('div', { style: { textAlign: 'center', fontSize: 13, color: THEME.green, marginBottom: 16 } }, 'Track your journey'),
+        // Tabs
+        React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
+          tabBtn('individual', 'INDIVIDUAL', 'User'),
+          tabBtn('leaderboard', 'LEADERBOARD', 'Trophy')),
+        // Body
+        tab === 'individual' ? individual : leaderboard
       )
     )
   );
