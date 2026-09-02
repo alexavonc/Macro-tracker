@@ -191,34 +191,46 @@ const FRAME_CENT_X = [
   49.5,51.4,53.7,54.0,56.1,63.9,            // angry
 ];
 
-// Global sprite cache — load once, resolve all pending callbacks
-let _sprite  = null;
-const _queue = [];
-let _loading = false;
+// Sprite sets — the default (hijabi) plus per-account overrides. Both sheets share the same
+// 31-frame index layout (ANIMATIONS); only the sheet image and per-frame geometry differ.
+const DEFAULT_SET = { path: SPRITE_PATH, bboxes: FRAME_BBOXES, centX: FRAME_CENT_X, scale: FRAME_SCALE, maxW: MAX_FRAME_W, maxH: MAX_FRAME_H };
+const SPRITE_SETS = {
+  'alexavonc@gmail.com': {
+    path: '/assets/character-sprite-alexa.png',
+    bboxes: [[50,58,87,235],[192,58,86,235],[332,58,87,235],[559,80,74,182],[676,80,74,182],[784,80,77,184],[896,80,77,182],[1080,81,74,182],[1193,81,72,181],[1308,81,74,182],[1421,81,73,182],[522,331,75,176],[644,331,78,176],[775,331,76,177],[902,331,78,177],[1058,331,79,179],[1179,332,77,177],[1309,332,78,176],[1429,333,77,176],[114,562,92,181],[310,561,94,182],[493,561,98,182],[681,560,95,183],[869,560,90,183],[1051,560,89,183],[126,784,82,199],[318,782,83,201],[515,781,84,203],[727,779,126,205],[965,776,136,207],[1232,768,128,216]],
+    centX: [43.7,42.4,43.3,36.5,36.6,40.2,38.9,36.4,36,36.5,36.1,36,37.8,38,39.2,38.2,37.2,39,38.4,49.8,50.7,54.1,51.9,47.5,47.2,40.8,41.3,41.6,65,69.7,62.7],
+    scale: {}, maxW: 136, maxH: 235,
+  },
+};
+function resolveSpriteSet(email) { return (email && SPRITE_SETS[email]) || DEFAULT_SET; }
 
-function loadSprite(cb) {
-  if (_sprite)  { cb(_sprite); return; }
-  _queue.push(cb);
-  if (_loading) return;
-  _loading = true;
+// Per-path sprite cache — load each sheet once, resolve all its pending callbacks.
+const _spriteCache = {};
+function loadSprite(path, cb) {
+  const e = _spriteCache[path] || (_spriteCache[path] = { img: null, queue: [], loading: false });
+  if (e.img) { cb(e.img); return; }
+  e.queue.push(cb);
+  if (e.loading) return;
+  e.loading = true;
   const img = new Image();
-  img.src = SPRITE_PATH;
-  img.onload  = () => { _sprite = img; _queue.forEach(fn => fn(img)); _queue.length = 0; };
-  img.onerror = () => console.error('[PetCat] sprite failed:', SPRITE_PATH);
+  img.src = path;
+  img.onload  = () => { e.img = img; e.queue.forEach(fn => fn(img)); e.queue.length = 0; };
+  img.onerror = () => console.error('[PetCat] sprite failed:', path);
 }
 
-function PetCat({ state = 'idle', size = 160 }) {
+function PetCat({ state = 'idle', size = 160, set = DEFAULT_SET }) {
   const canvasRef   = useRef(null);
   const timerRef    = useRef(null);
   const frameIdxRef = useRef(0);
   const [sprite, setSprite] = useState(null);
 
-  const scale = Math.min(size / MAX_FRAME_W, size / MAX_FRAME_H);
+  const scale = Math.min(size / set.maxW, size / set.maxH);
 
   useEffect(() => {
-    loadSprite(img => setSprite(img));
+    setSprite(null);
+    loadSprite(set.path, img => setSprite(img));
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, []);
+  }, [set.path]);
 
   useEffect(() => {
     if (!sprite) return;
@@ -236,11 +248,11 @@ function PetCat({ state = 'idle', size = 160 }) {
       ctx.clearRect(0, 0, size, size);
 
       const fi = anim.frames[frameIdxRef.current];
-      const [sx, sy, sw, sh] = FRAME_BBOXES[fi];
-      const fscale = scale * (FRAME_SCALE[fi] || 1);
+      const [sx, sy, sw, sh] = set.bboxes[fi];
+      const fscale = scale * (set.scale[fi] || 1);
       const dw = Math.round(sw * fscale);
       const dh = Math.round(sh * fscale);
-      const dx = Math.round(size / 2 - FRAME_CENT_X[fi] * fscale);
+      const dx = Math.round(size / 2 - set.centX[fi] * fscale);
       const dy = size - dh;
       ctx.drawImage(sprite, sx, sy, sw, sh, dx, dy, dw, dh);
 
@@ -1147,21 +1159,21 @@ const pixelLabel = (extra = {}) => ({
 });
 
 // A cropped head-and-shoulders portrait of the idle character, for the LV badge.
-function CharacterFace({ size = 42 }) {
+function CharacterFace({ size = 42, set = DEFAULT_SET }) {
   const ref = useRef(null);
   useEffect(() => {
-    loadSprite(img => {
+    loadSprite(set.path, img => {
       const cv = ref.current; if (!cv) return;
       const ctx = cv.getContext('2d');
       ctx.clearRect(0, 0, size, size);
-      const [sx, sy, sw] = FRAME_BBOXES[0];
-      const sh = 108;                                   // head + shoulders slice of the idle frame
+      const [sx, sy, sw, fh] = set.bboxes[0];
+      const sh = Math.round(fh * 0.52);                 // head + shoulders slice of the idle frame
       const scale = Math.max(size / sw, size / sh);
       const dw = sw * scale, dh = sh * scale;
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, sx, sy, sw, sh, (size - dw) / 2, 2, dw, dh);
     });
-  }, [size]);
+  }, [size, set.path]);
   return React.createElement('canvas', { ref, width: size, height: size, style: { display: 'block' } });
 }
 
@@ -1257,7 +1269,7 @@ function MealListRow({ meal, onOpen, divider }) {
 }
 
 // ─── Home Page ────────────────────────────────────────────────────────────────
-function HomePage({ meals, goals, game, justFed, onOpenMeal, onOpenSettings, onGoProgress, onGoMeals }) {
+function HomePage({ meals, goals, game, justFed, spriteSet = DEFAULT_SET, onOpenMeal, onOpenSettings, onGoProgress, onGoMeals }) {
   const dayMeals = meals[toDateKey(today())] || [];
 
   const totals = dayMeals.reduce((acc, m) => ({
@@ -1304,7 +1316,7 @@ function HomePage({ meals, goals, game, justFed, onOpenMeal, onOpenSettings, onG
     // LV / XP card
     React.createElement('div', { style: pixelCard({ position: 'absolute', top: 14, left: 12, zIndex: 1, display: 'flex', alignItems: 'center', gap: 9, padding: '7px 12px 7px 8px' }) },
       React.createElement('div', { style: { width: 42, height: 42, borderRadius: 10, overflow: 'hidden', border: '1px solid ' + THEME.line, background: THEME.creamHi, flexShrink: 0 } },
-        React.createElement(CharacterFace, { size: 42 })),
+        React.createElement(CharacterFace, { size: 42, set: spriteSet })),
       React.createElement('div', null,
         React.createElement('div', { style: pixelLabel({ fontSize: 15, lineHeight: 1 }) }, 'LV. ' + level),
         React.createElement('div', { style: { width: 108, height: 9, borderRadius: 5, background: '#3B372F', overflow: 'hidden', margin: '5px 0 3px' } },
@@ -1321,7 +1333,7 @@ function HomePage({ meals, goals, game, justFed, onOpenMeal, onOpenSettings, onG
     ),
     // Character standing on the path
     React.createElement('div', { style: { position: 'absolute', top: '24%', left: '50%', transform: 'translateX(-50%)', zIndex: 1, pointerEvents: 'none' } },
-      React.createElement(PetCat, { state: petState, size: 150 })),
+      React.createElement(PetCat, { state: petState, size: 150, set: spriteSet })),
 
     // ── Scrollable cards floating over the scenery ──
     React.createElement('div', { style: { position: 'absolute', inset: 0, overflowY: 'auto', zIndex: 2, paddingTop: '43vh', paddingBottom: 112 } },
@@ -2100,6 +2112,7 @@ function App() {
         page === 'home'
           ? React.createElement(HomePage, {
               meals, goals, game, justFed,
+              spriteSet: resolveSpriteSet(user?.email),
               onOpenMeal: setDetailMeal,
               onOpenSettings: () => setShowSettings(true),
               onGoProgress: () => setPage('analytics'),
