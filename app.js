@@ -1664,8 +1664,11 @@ function AnalyticsPage({ meals, goals }) {
   };
 
   return React.createElement('div', { style: { position: 'relative', height: '100%', overflow: 'hidden', background: '#4A3423' } },
-    // Journal-room backdrop (fixed; the cream panel scrolls over it).
-    React.createElement('div', { style: { position: 'absolute', inset: 0, backgroundImage: "url('/assets/progress-bg.jpg')", backgroundSize: 'cover', backgroundPosition: 'center top', zIndex: 0 } }),
+    // Journal-room backdrop (fixed; the cream panel scrolls over it). This scene is landscape
+    // (1.5:1), unlike the portrait Home/Meals backdrops — so `cover` on a portrait phone zooms
+    // into a tiny slice. Fit the full image width instead (top-anchored, no vertical tiling) so
+    // the whole room shows in the reveal band.
+    React.createElement('div', { style: { position: 'absolute', inset: 0, backgroundImage: "url('/assets/progress-bg.jpg')", backgroundSize: '100% auto', backgroundPosition: 'top center', backgroundRepeat: 'no-repeat', zIndex: 0 } }),
     React.createElement('div', { style: { position: 'absolute', inset: 0, overflowY: 'auto', zIndex: 1 } },
       React.createElement('div', { style: { height: '30vh' } }),   // reveal the scene above the panel
       React.createElement('div', { style: { minHeight: 'calc(100vh - 30vh)', background: MEALS_PANEL, borderTopLeftRadius: 28, borderTopRightRadius: 28, boxShadow: '0 -6px 20px rgba(0,0,0,0.22)', padding: '22px 16px 130px' } },
