@@ -466,11 +466,12 @@ async function generatePixelSprite(photoDataUrl, foodName) {
     } catch (e) {
       clearTimeout(timer);
       const timedOut = e.name === 'AbortError';
-      console.error(`[pixel sprite] attempt ${attempt}/${ATTEMPTS} failed${timedOut ? ' (timeout)' : ''}:`, e.message || e);
-      if (attempt === ATTEMPTS) return null;
+      const msg = timedOut ? `Timed out after ${TIMEOUT_MS / 1000}s — the connection may be slow.` : (e.message || String(e));
+      console.error(`[pixel sprite] attempt ${attempt}/${ATTEMPTS} failed:`, msg);
+      if (attempt === ATTEMPTS) throw new Error(msg);
     }
   }
-  return null;
+  throw new Error('Image generation failed.');
 }
 
 // A small JPEG of the source photo, stashed on a meal whose sprite failed so the pixel
@@ -500,6 +501,7 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
   const [pct, setPct]       = useState(0);
   const [phase, setPhase]   = useState('progress');  // progress | flip | done | failed
   const [sprite, setSprite] = useState(null);
+  const [errMsg, setErrMsg] = useState('');
   const spriteRef   = useRef(null);
   const resolvedRef = useRef(false);
   const runIdRef    = useRef(0);
@@ -510,11 +512,12 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
     resolvedRef.current = false;
     spriteRef.current = null;
     setSprite(null);
+    setErrMsg('');
     setPct(0);
     setPhase('progress');
     Promise.resolve().then(makeSprite)
       .then(s => { if (runId === runIdRef.current) { spriteRef.current = s || null; setSprite(s || null); } })
-      .catch(() => { if (runId === runIdRef.current) { spriteRef.current = null; setSprite(null); } })
+      .catch(e => { if (runId === runIdRef.current) { spriteRef.current = null; setSprite(null); setErrMsg(e?.message || 'Something went wrong.'); } })
       .finally(() => { if (runId === runIdRef.current) resolvedRef.current = true; });
   }, [makeSprite]);
 
@@ -584,11 +587,12 @@ function DigestOverlay({ photo, foodName, makeSprite, onDone }) {
         )
       )
     ),
-    React.createElement('div', { style: { textAlign: 'center' } },
+    React.createElement('div', { style: { textAlign: 'center', maxWidth: 340, padding: '0 16px' } },
       React.createElement('div', { style: { fontSize: 22, fontWeight: 900, color: phase === 'failed' ? '#dc2626' : (phase === 'done' ? '#16a34a' : '#111') } },
         phase === 'failed' ? 'Couldn’t draw this one' : (phase === 'done' ? 'Digested!' : 'Digesting…')),
       React.createElement('div', { style: { fontSize: 13, color: '#9ca3af', marginTop: 4 } },
-        phase === 'failed' ? 'The art didn’t generate — your meal is still saved.' : (foodName || ''))
+        phase === 'failed' ? 'The art didn’t generate — your meal is still saved.' : (foodName || '')),
+      phase === 'failed' && errMsg && React.createElement('div', { style: { fontSize: 11, color: '#c1c5cb', marginTop: 8, fontFamily: 'monospace', wordBreak: 'break-word', lineHeight: 1.4 } }, errMsg)
     ),
     phase === 'failed' && React.createElement('div', { style: { display: 'flex', gap: 12 } },
       React.createElement('button', {
@@ -1344,12 +1348,16 @@ function MealDetail({ meal, onClose, onUpdateMeal }) {
   async function regenerate() {
     if (!meal.pendingPhoto || regenBusy) return;
     setRegenBusy(true); setRegenErr('');
-    const sprite = await generatePixelSprite(meal.pendingPhoto, meal.name);
-    setRegenBusy(false);
-    if (!sprite) { setRegenErr('Still couldn’t generate — try again.'); return; }
-    const spriteId = meal.spriteId || meal.imageHash || String(meal.id);
-    addSprite(spriteId, sprite);
-    onUpdateMeal && onUpdateMeal(meal.id, { spriteId, pendingPhoto: undefined });
+    try {
+      const sprite = await generatePixelSprite(meal.pendingPhoto, meal.name);
+      const spriteId = meal.spriteId || meal.imageHash || String(meal.id);
+      addSprite(spriteId, sprite);
+      onUpdateMeal && onUpdateMeal(meal.id, { spriteId, pendingPhoto: undefined });
+    } catch (e) {
+      setRegenErr(e?.message || 'Still couldn’t generate — try again.');
+    } finally {
+      setRegenBusy(false);
+    }
   }
 
   const macroCol = (label, val, color, tint) => React.createElement('div', { style: { flex: 1, textAlign: 'center' } },
