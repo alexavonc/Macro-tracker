@@ -434,9 +434,35 @@ function hashImage(str) {
 // attempt gets a generous timeout (an AbortController, since fetch has none of its own)
 // and we retry once before giving up. Returns {full, thumb}, or null after both attempts
 // fail — callers save the meal either way (and stash a photo so it can be regenerated).
+// Re-encode any browser-decodable photo into a clean RGBA PNG the OpenAI edits endpoint
+// will accept. A phone *gallery* upload ships the raw file — often iOS HEIC or a JPEG with
+// a color profile/mode the editor rejects ("Invalid image file or mode") — whereas a camera
+// capture is already canvas-encoded JPEG, which is why camera scans worked and uploads didn't.
+// Drawing to a canvas normalizes format *and* color mode, and capping the longest side keeps
+// the upload small and fast on mobile. Returns {blob, ext}; falls back to the raw file if the
+// image can't be decoded (e.g. desktop HEIC), preserving prior behavior.
+function normalizeForEdit(dataUrl, maxSide = 1024) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';           // flatten any alpha (photos have none) so JPEG is safe
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(b => resolve(b ? { blob: b, ext: 'jpg' } : null), 'image/jpeg', 0.9);
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
 async function generatePixelSprite(photoDataUrl, foodName) {
-  const blob = await (await fetch(photoDataUrl)).blob();
-  const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+  const normalized = await normalizeForEdit(photoDataUrl);
+  const { blob, ext } = normalized || await (async () => { const b = await (await fetch(photoDataUrl)).blob(); return { blob: b, ext: b.type === 'image/png' ? 'png' : 'jpg' }; })();
   const buildForm = () => {
     const form = new FormData();
     form.append('model', 'gpt-image-1-mini');
