@@ -1980,7 +1980,10 @@ function App() {
         const d = snap.data();
         if (d.goals) setGoals(d.goals);
         if (d.profile) { setProfile(d.profile); storageSet(PROFILE_KEY, d.profile); }
-        if (d.meals && Object.keys(d.meals).length > 0) {
+        // Firestore is authoritative for meals whenever the user doc exists — an empty map means the
+        // account was cleared (see reset-tool/reset-all-users.mjs), so we must NOT keep stale local
+        // meals or the next save would resurrect them. `d.meals` is truthy even when `{}`.
+        if (d.meals) {
           setMeals(d.meals);
           storageSet(MEALS_KEY, d.meals);
         }
@@ -2131,7 +2134,9 @@ function App() {
         page === 'home'
           ? React.createElement(HomePage, {
               meals, goals, game, justFed,
-              spriteSet: resolveSpriteSet(user?.email),
+              // `?preview=<email>` swaps the displayed character for any account (cosmetic only) —
+              // handy for checking a per-account sprite without that person's login.
+              spriteSet: resolveSpriteSet(new URLSearchParams(location.search).get('preview') || user?.email),
               onOpenMeal: setDetailMeal,
               onOpenSettings: () => setShowSettings(true),
               onGoProgress: () => setPage('analytics'),
