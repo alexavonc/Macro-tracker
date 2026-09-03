@@ -5,6 +5,7 @@ const MEALS_KEY = 'macro-tracker-meals';
 const GOALS_KEY = 'macro-tracker-goals';
 const PROFILE_KEY = 'macro-tracker-profile';
 const SPRITES_KEY = 'macro-tracker-sprites';
+const UID_KEY = 'macro-tracker-uid';   // which account the cached data above belongs to
 // profile = { units:'metric'|'imperial', heightCm, weightKg, age, sex:'male'|'female',
 //             activity:'sedentary'|'light'|'moderate'|'active'|'veryActive',
 //             goalDir:'lose'|'maintain'|'gain' }  — null until onboarding (A3) completes
@@ -18,6 +19,15 @@ function storageGet(key) {
 
 function storageSet(key, value) {
   try { window.localStorage.setItem(key, JSON.stringify(value)); } catch {}
+}
+
+// Per-user isolation: wipe all account-scoped cache. Called when the signed-in user differs from
+// the cache owner (shared browser / account switch) and on sign-out.
+function clearLocalUserData() {
+  for (const k of [MEALS_KEY, GOALS_KEY, PROFILE_KEY, GAME_KEY, SPRITES_KEY]) {
+    try { window.localStorage.removeItem(k); } catch {}
+  }
+  try { window.localStorage.removeItem('onboarding-dismissed'); } catch {}
 }
 
 // Shared sprite store (base64 keyed by id) — provided by App, consumed by MealCard/MealForm.
@@ -1920,6 +1930,7 @@ function App() {
   const [authorized, setAuthorized]   = useState(null);   // null = checking · true · false
   const [authReady, setAuthReady]     = useState(!isFirebaseConfigured());
   const firestoreSaveRef = useRef(null);
+  const loadedUidRef = useRef(null);   // set once this account's data has loaded; gates saving
   const latestRef        = useRef(null);
   const [sprites, setSprites] = useState(() => storageGet(SPRITES_KEY) || {});
   const spritesRef = useRef(sprites);
@@ -1973,33 +1984,34 @@ function App() {
   }, [authReady, profile]);
 
   async function loadUserData(u) {
+    // Shared-browser isolation: if the cache belongs to a different user, drop it (and reset state)
+    // before anything can be shown or re-saved into this account.
+    if (storageGet(UID_KEY) !== u.uid) {
+      clearLocalUserData();
+      setMeals({}); setGoals(DEFAULT_GOALS); setProfile(null); setGame(seedGame({}));
+      setSprites({}); spritesRef.current = {};
+    }
+    storageSet(UID_KEY, u.uid);
     try {
       const ref = firebase.firestore().collection('users').doc(u.uid);
       const snap = await ref.get();
-      if (snap.exists) {
-        const d = snap.data();
-        if (d.goals) setGoals(d.goals);
-        if (d.profile) { setProfile(d.profile); storageSet(PROFILE_KEY, d.profile); }
-        // Firestore is authoritative for meals whenever the user doc exists — an empty map means the
-        // account was cleared (see reset-tool/reset-all-users.mjs), so we must NOT keep stale local
-        // meals or the next save would resurrect them. `d.meals` is truthy even when `{}`.
-        if (d.meals) {
-          setMeals(d.meals);
-          storageSet(MEALS_KEY, d.meals);
-        }
-        if (d.game) { setGame(d.game); storageSet(GAME_KEY, d.game); }
-        else if (d.meals) { const g = seedGame(d.meals); setGame(g); storageSet(GAME_KEY, g); }
-      }
-      // Load the sprite subcollection into the store (kept out of the main doc).
+      const d = snap.exists ? snap.data() : {};
+      // Firestore is authoritative for every account-scoped field. A brand-new account (no doc) or a
+      // cleared one (empty map) resets to defaults — never inherit whatever was cached locally.
+      const m = d.meals || {};
+      setMeals(m); storageSet(MEALS_KEY, m);
+      setGoals(d.goals || DEFAULT_GOALS); storageSet(GOALS_KEY, d.goals || DEFAULT_GOALS);
+      setProfile(d.profile || null); storageSet(PROFILE_KEY, d.profile || null);
+      const g = d.game || seedGame(m);
+      setGame(g); storageSet(GAME_KEY, g);
+      // Load the sprite subcollection into the store (kept out of the main doc). Replace, don't merge,
+      // so a fresh account never inherits a prior user's cached sprites.
       const sprSnap = await ref.collection('sprites').get();
-      if (!sprSnap.empty) {
-        const merged = { ...spritesRef.current };
-        sprSnap.forEach(doc => { const v = doc.data(); if (v && v.data) merged[doc.id] = v.data; });
-        spritesRef.current = merged;
-        setSprites(merged);
-        storageSet(SPRITES_KEY, merged);
-      }
+      const merged = {};
+      sprSnap.forEach(doc => { const v = doc.data(); if (v && v.data) merged[doc.id] = v.data; });
+      spritesRef.current = merged; setSprites(merged); storageSet(SPRITES_KEY, merged);
     } catch(e) { console.error('[Firestore] Load failed:', e); }
+    loadedUidRef.current = u.uid;   // saves are now safe for this account
   }
 
   function scheduleFirestoreSave() {
@@ -2007,6 +2019,7 @@ function App() {
     firestoreSaveRef.current = setTimeout(async () => {
       const { meals, goals, profile, game, user: u } = latestRef.current || {};
       if (!u || !isFirebaseConfigured()) return;
+      if (loadedUidRef.current !== u.uid) return;   // this account's data hasn't loaded yet
       // Strip pendingPhoto (a local-only regeneration fallback) so it never counts against
       // the 1 MiB document limit — the sprite itself lives in its own subcollection.
       const cleanMeals = {};
@@ -2072,6 +2085,10 @@ function App() {
 
   async function handleSignOut() {
     await firebase.auth().signOut();
+    clearLocalUserData();
+    try { window.localStorage.removeItem(UID_KEY); } catch {}
+    setMeals({}); setGoals(DEFAULT_GOALS); setProfile(null); setGame(seedGame({}));
+    setSprites({}); spritesRef.current = {}; loadedUidRef.current = null;
     setUser(null);
     setShowSettings(false);
   }
