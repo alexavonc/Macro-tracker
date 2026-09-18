@@ -87,3 +87,28 @@ drop policy if exists own_sprite_objects on storage.objects;
 create policy own_sprite_objects on storage.objects for all
   using (bucket_id = 'sprites' and (storage.foldername(name))[1] = public.current_email())
   with check (bucket_id = 'sprites' and (storage.foldername(name))[1] = public.current_email());
+
+-- ── save_failures: durable, per-user record of any persistence failure ────────
+-- Purpose: proactively catch a recurrence of the silent meal-loss class across all
+-- users without waiting for a report. Written best-effort from the client whenever a
+-- meal or sprite save is dropped, errors, or returns no row. Never blocks the user.
+-- Per-user RLS keeps each user to their own rows; audit ALL rows with the service_role
+-- key (bypasses RLS): select email, kind, reason, at from save_failures order by at desc;
+create table if not exists public.save_failures (
+  id         uuid primary key default gen_random_uuid(),
+  email      text not null,
+  kind       text not null,          -- 'meal' | 'sprite'
+  reason     text not null,          -- 'skipped-no-owner' | 'error' | 'no-row-returned'
+  client_id  bigint,                 -- meal's original id (null for sprites)
+  sprite_id  text,                   -- sprite id (null for meals)
+  detail     text,                   -- error message or meal name, for context
+  at         timestamptz not null default now()
+);
+create index if not exists save_failures_email_at_idx on public.save_failures (email, at desc);
+
+alter table public.save_failures enable row level security;
+
+drop policy if exists own_save_failures on public.save_failures;
+create policy own_save_failures on public.save_failures for all
+  using (email = public.current_email())
+  with check (email = public.current_email());

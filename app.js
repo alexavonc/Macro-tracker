@@ -1989,11 +1989,13 @@ function App() {
       const path = `${email}/${id}.png`;
       (async () => {
         try {
+          console.log('[sprite] upload attempt', { sprite_id: id, path });
           const up = await sb.storage.from('sprites').upload(path, dataUrlToBlob(b64), { upsert: true, contentType: 'image/png' });
           if (up.error) throw up.error;
           const ins = await sb.from('sprites').upsert({ email, user_id: u.id, sprite_id: id, storage_path: path }, { onConflict: 'email,sprite_id' });
           if (ins.error) throw ins.error;
-        } catch (e) { console.error('[Supabase] sprite save failed:', e && e.message, e); }
+          console.log('[sprite] saved ok', { sprite_id: id });
+        } catch (e) { logSaveFailure('sprite', 'error', { sprite_id: id, detail: e && e.message }); }
       })();
     }
   }, []);
@@ -2071,11 +2073,50 @@ function App() {
   }
 
   // Meal persistence is now per-row: one insert / delete / update per meal — no whole-history rewrite.
+  // Best-effort failure recorder for the silent meal-loss class. Logs a greppable line
+  // AND writes a durable row to save_failures (queryable across users via service_role),
+  // so a save that vanishes surfaces instead of being discovered days later. Never throws.
+  function logSaveFailure(kind, reason, extra = {}) {
+    const tag = kind === 'sprite' ? '[sprite]' : '[meal]';
+    console.error(`${tag} SAVE FAILURE`, { reason, ...extra });
+    try {
+      const u = latestRef.current?.user, sb = getSB();
+      if (!u || !sb) return;   // no session -> can't record remotely; console line already emitted
+      sb.from('save_failures').insert({
+        email: (u.email || '').toLowerCase(), kind, reason,
+        client_id: extra.client_id ?? null, sprite_id: extra.sprite_id ?? null, detail: extra.detail ?? null,
+      }).then(({ error }) => { if (error) console.error('[save_failures] insert failed:', error.message); });
+    } catch (_) { /* tracking must never block the user flow */ }
+  }
+
   function saveMealRow(dateKey, meal) {
-    const o = saveOwner(); if (!o) return;
+    const cid = meal.id;
+    const o = saveOwner();
+    if (!o) {
+      // Account data hasn't finished loading (or no session): the meal is on-screen but the
+      // write would be silently dropped. This is the original disappear-after-log signature —
+      // surface it (banner + failure row) instead of returning quietly.
+      logSaveFailure('meal', 'skipped-no-owner', { client_id: cid, detail: meal.name });
+      setSaveError(true);
+      return;
+    }
     const { pendingPhoto, ...clean } = meal;   // pendingPhoto is a local-only regeneration fallback
+    console.log('[meal] persist attempt', { client_id: cid, name: clean.name, dateKey, hasSprite: !!clean.spriteId });
     o.sb.from('meals').upsert(mealToRow(dateKey, clean, o.email, o.uid), { onConflict: 'email,client_id' })
-      .then(({ error }) => { if (error) { console.error('[Supabase] meal save failed:', error.message, error); setSaveError(true); } else setSaveError(false); });
+      .select('id,client_id')
+      .then(({ data, error }) => {
+        if (error) {
+          logSaveFailure('meal', 'error', { client_id: cid, detail: error.message });
+          setSaveError(true);
+        } else if (!data || !data.length) {
+          // Null error but no row returned = the write didn't actually land (e.g. RLS filtered it).
+          logSaveFailure('meal', 'no-row-returned', { client_id: cid, detail: clean.name });
+          setSaveError(true);
+        } else {
+          console.log('[meal] persisted ok', { client_id: cid, row_id: data[0].id });
+          setSaveError(false);
+        }
+      });
   }
   function deleteMealRow(id) {
     const o = saveOwner(); if (!o) return;
@@ -2116,6 +2157,7 @@ function App() {
 
   function addMeal(dateKey, meal) {
     const m = { ...meal, loggedAt: meal.loggedAt || Date.now() };
+    console.log('[meal] add', { client_id: m.id, name: m.name, dateKey, hasImage: !!(m.spriteId || m.pendingPhoto) });
 
     // Would this meal push today's total across the calorie goal? (award a bonus if so)
     const goalCals = goals.calories || (goals.protein * 4 + goals.carbs * 4 + goals.fat * 9);
