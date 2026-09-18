@@ -18,7 +18,8 @@ function storageGet(key) {
 }
 
 function storageSet(key, value) {
-  try { window.localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  try { window.localStorage.setItem(key, JSON.stringify(value)); }
+  catch (e) { console.error('[localStorage] write failed for', key, '—', e && e.name, e && e.message); }
 }
 
 // Per-user isolation: wipe all account-scoped cache. Called when the signed-in user differs from
@@ -1934,6 +1935,7 @@ function App() {
   const latestRef        = useRef(null);
   const [sprites, setSprites] = useState(() => storageGet(SPRITES_KEY) || {});
   const spritesRef = useRef(sprites);
+  const [saveError, setSaveError] = useState(false);   // last Firestore save rejected — surfaced to the user
 
   // Keep latestRef always current — read inside the debounced save to avoid stale closures
   useEffect(() => { latestRef.current = { meals, goals, profile, game, user }; });
@@ -1947,7 +1949,7 @@ function App() {
     const u = latestRef.current?.user;
     if (u && isFirebaseConfigured()) {
       firebase.firestore().collection('users').doc(u.uid).collection('sprites').doc(id).set({ data: b64 })
-        .catch(e => console.error('[Firestore] sprite save failed:', e));
+        .catch(e => console.error('[Firestore] sprite save failed:', e && e.code, '—', e && e.message, e));
     }
   }, []);
   const resolveSprite = useCallback(meal => {
@@ -2028,7 +2030,13 @@ function App() {
       }
       try {
         await firebase.firestore().collection('users').doc(u.uid).set({ meals: cleanMeals, goals, profile: profile || null, game: game || null });
-      } catch(e) { console.error('[Firestore] Save failed:', e); }
+        setSaveError(false);
+      } catch(e) {
+        // Surface the failure instead of swallowing it: the user sees a banner, and the real
+        // error (code + message) lands in the console so an affected session is self-diagnosing.
+        console.error('[Firestore] Save failed:', e && e.code, '—', e && e.message, e);
+        setSaveError(true);
+      }
     }, 1500);
   }
 
@@ -2145,6 +2153,11 @@ function App() {
   return (
     React.createElement(SpriteCtx.Provider, { value: { resolve: resolveSprite, add: addSprite } },
     React.createElement('div', { style: { position: 'relative', width: '100%', height: '100vh', background: THEME.creamHi, display: 'flex', flexDirection: 'column', overflow: 'hidden' } },
+
+      // Save-failure banner — overlays without shifting layout (position: absolute).
+      saveError && React.createElement('div', {
+        style: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 200, background: '#b91c1c', color: '#fff', padding: '9px 14px', fontSize: 12, fontWeight: 700, textAlign: 'center', lineHeight: 1.35, boxShadow: '0 2px 6px rgba(0,0,0,.25)' }
+      }, '⚠️ Couldn’t save your latest changes — they may be lost on reload. Check your connection and try again.'),
 
       // Pages
       React.createElement('div', { style: { flex: 1, overflow: 'hidden' } },
