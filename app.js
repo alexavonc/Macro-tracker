@@ -34,18 +34,53 @@ function clearLocalUserData() {
 // Shared sprite store (base64 keyed by id) — provided by App, consumed by MealCard/MealForm.
 const SpriteCtx = React.createContext({ resolve: () => null, add: () => {} });
 
-// ─── Firebase helpers ─────────────────────────────────────────────────────────
-function isFirebaseConfigured() {
-  const c = window.FIREBASE_CONFIG;
-  return !!(c && c.apiKey && c.projectId);
-}
+// ─── Supabase client ──────────────────────────────────────────────────────────
+// URL + anon key are public by design (the browser is meant to hold them); Row-Level
+// Security on every table is what actually protects each user's data. See supabase/schema.sql.
+const SUPABASE_URL  = 'https://fpjqkmjtwnllmndxydta.supabase.co';
+const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZwanFrbWp0d25sbG1uZHh5ZHRhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2ODkwNjksImV4cCI6MjEwNTI2NTA2OX0.Al3_zP8Xv-kWnrs6j8Ky90WwN_K0CQ5g6UFEBYpwR1A';
 
-function initFirebase() {
-  if (!isFirebaseConfigured()) return false;
-  try {
-    if (!firebase.apps.length) firebase.initializeApp(window.FIREBASE_CONFIG);
-    return true;
-  } catch(e) { console.error('[Firebase] init failed:', e); return false; }
+let _sb = null;
+function getSB() {
+  if (!_sb && window.supabase && SUPABASE_URL && SUPABASE_ANON) {
+    _sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+  }
+  return _sb;
+}
+function isSupabaseConfigured() { return !!getSB(); }
+
+// DB row ⇄ app meal shape. The app keeps its day-bucketed { dateKey: [meal] } state; only
+// persistence changes — each meal is now its own row instead of an entry in one big blob.
+function rowToMeal(r) {
+  return {
+    id: Number(r.client_id), name: r.name,
+    protein: Number(r.protein), carbs: Number(r.carbs), fat: Number(r.fat), calories: Number(r.calories),
+    serving: r.serving, imageHash: r.image_hash, dish: r.dish, spriteId: r.sprite_id,
+    loggedAt: r.logged_at ? Date.parse(r.logged_at) : undefined,
+  };
+}
+function mealToRow(dateKey, m, email, uid) {
+  return {
+    email, user_id: uid || null, client_id: m.id, date_key: dateKey,
+    logged_at: new Date(m.loggedAt || Date.now()).toISOString(),
+    name: m.name, protein: m.protein, carbs: m.carbs, fat: m.fat, calories: m.calories,
+    serving: m.serving ?? '', image_hash: m.imageHash || null, dish: m.dish || null, sprite_id: m.spriteId || null,
+  };
+}
+// Map an app-side meal patch (camelCase) to DB columns for an UPDATE.
+function patchToCols(patch) {
+  const map = { imageHash: 'image_hash', spriteId: 'sprite_id' };
+  const cols = {};
+  for (const [k, v] of Object.entries(patch)) cols[map[k] || k] = v;
+  return cols;
+}
+// data: URL → Blob, for uploading a sprite PNG to Storage.
+function dataUrlToBlob(dataUrl) {
+  const [meta, b64] = dataUrl.split(',');
+  const mime = (meta.match(/:(.*?);/) || [null, 'image/png'])[1];
+  const bin = atob(b64); const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
 }
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -447,12 +482,13 @@ function downscaleToSprite(pngDataUrl, size = 128) {
 
 // Generate a pixel-art sprite from the captured food photo via the server-side gpt-image-1 proxy.
 // Returns a small (64px) PNG data URL, or null on failure — callers save the meal either way.
-// Attach the signed-in user's Firebase ID token to a request, for the gated /api proxies.
+// Attach the signed-in user's Supabase access token to a request, for the gated /api proxies.
 async function authedFetch(url, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   try {
-    const u = window.firebase && firebase.auth().currentUser;
-    if (u) headers['Authorization'] = 'Bearer ' + (await u.getIdToken());
+    const sb = getSB();
+    const { data } = sb ? await sb.auth.getSession() : { data: {} };
+    if (data.session) headers['Authorization'] = 'Bearer ' + data.session.access_token;
   } catch (e) { /* unauthenticated — the server will answer 401 */ }
   return fetch(url, { ...opts, headers });
 }
@@ -1122,7 +1158,7 @@ function SettingsSheet({ user, goals, onGoalsChange, profile, onEditProfile, onS
               style: { background: '#fee2e2', border: 'none', borderRadius: 10, padding: '7px 14px', fontSize: 12, fontWeight: 600, color: '#ef4444', cursor: 'pointer', flexShrink: 0 }
             }, 'Sign out')
           )
-        : isFirebaseConfigured()
+        : isSupabaseConfigured()
           ? React.createElement('button', {
               onClick: onSignIn,
               style: { width: '100%', background: 'white', border: '1.5px solid #e5e7eb', borderRadius: 14, padding: '13px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, cursor: 'pointer', marginBottom: 20, fontSize: 14, fontWeight: 600, color: '#374151', boxShadow: '0 1px 3px rgba(0,0,0,.08)' }
@@ -1131,7 +1167,7 @@ function SettingsSheet({ user, goals, onGoalsChange, profile, onEditProfile, onS
               'Continue with Google'
             )
           : React.createElement('div', { style: { background: '#f9fafb', borderRadius: 14, padding: '12px 14px', marginBottom: 20 } },
-              React.createElement('p', { style: { fontSize: 12, color: '#9ca3af', margin: 0, lineHeight: 1.5 } }, 'Cloud sync not configured. Fill in firebase-config.js to enable Google sign-in.')
+              React.createElement('p', { style: { fontSize: 12, color: '#9ca3af', margin: 0, lineHeight: 1.5 } }, 'Cloud sync not configured.')
             ),
 
       // Body Metrics section — opens the onboarding sheet in edit mode to re-derive goals
@@ -1929,8 +1965,8 @@ function App() {
   const [showProfileEdit, setShowProfileEdit] = useState(false);
   const [user, setUser]               = useState(null);
   const [authorized, setAuthorized]   = useState(null);   // null = checking · true · false
-  const [authReady, setAuthReady]     = useState(!isFirebaseConfigured());
-  const firestoreSaveRef = useRef(null);
+  const [authReady, setAuthReady]     = useState(!isSupabaseConfigured());
+  const profileSaveRef = useRef(null);
   const loadedUidRef = useRef(null);   // set once this account's data has loaded; gates saving
   const latestRef        = useRef(null);
   const [sprites, setSprites] = useState(() => storageGet(SPRITES_KEY) || {});
@@ -1940,16 +1976,25 @@ function App() {
   // Keep latestRef always current — read inside the debounced save to avoid stale closures
   useEffect(() => { latestRef.current = { meals, goals, profile, game, user }; });
 
-  // Sprite store: deduped base64 keyed by id, kept OUT of the meals doc (its own Firestore subcollection).
+  // Sprite store: deduped, keyed by id. The freshly-generated data URL is kept locally for
+  // instant display; the PNG bytes persist to the Storage bucket, with metadata in the sprites table.
   const addSprite = useCallback((id, b64) => {
     if (!id || !b64 || spritesRef.current[id]) return;
     spritesRef.current = { ...spritesRef.current, [id]: b64 };
     setSprites(spritesRef.current);
     storageSet(SPRITES_KEY, spritesRef.current);
-    const u = latestRef.current?.user;
-    if (u && isFirebaseConfigured()) {
-      firebase.firestore().collection('users').doc(u.uid).collection('sprites').doc(id).set({ data: b64 })
-        .catch(e => console.error('[Firestore] sprite save failed:', e && e.code, '—', e && e.message, e));
+    const u = latestRef.current?.user, sb = getSB();
+    if (u && sb) {
+      const email = (u.email || '').toLowerCase();
+      const path = `${email}/${id}.png`;
+      (async () => {
+        try {
+          const up = await sb.storage.from('sprites').upload(path, dataUrlToBlob(b64), { upsert: true, contentType: 'image/png' });
+          if (up.error) throw up.error;
+          const ins = await sb.from('sprites').upsert({ email, user_id: u.id, sprite_id: id, storage_path: path }, { onConflict: 'email,sprite_id' });
+          if (ins.error) throw ins.error;
+        } catch (e) { console.error('[Supabase] sprite save failed:', e && e.message, e); }
+      })();
     }
   }, []);
   const resolveSprite = useCallback(meal => {
@@ -1957,26 +2002,19 @@ function App() {
     return meal.spriteId ? (sprites[meal.spriteId] || null) : (meal.sprite || null);
   }, [sprites]);
 
-  // Firebase auth listener + handle redirect result from signInWithRedirect
+  // Supabase auth listener. onAuthStateChange fires immediately with the current session
+  // (event INITIAL_SESSION), then on sign-in / sign-out / token refresh.
   useEffect(() => {
-    if (!initFirebase()) return;
-
-    // Handle the redirect return — fires before onAuthStateChanged on a fresh page load
-    firebase.auth().getRedirectResult().then(result => {
-      if (result && result.user) {
-        setUser(result.user);
-        loadUserData(result.user);
-      }
-    }).catch(e => console.error('[Auth] redirect result error:', e));
-
-    const unsub = firebase.auth().onAuthStateChanged(u => {
+    const sb = getSB();
+    if (!sb) { setAuthReady(true); return; }
+    const { data: sub } = sb.auth.onAuthStateChange((event, session) => {
+      const u = session?.user || null;
       setUser(u);
       setAuthReady(true);
-      if (u) {
-        loadUserData(u);
-      }
+      // Load once per real sign-in; skip TOKEN_REFRESHED so we don't refetch on every refresh.
+      if (u && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) loadUserData(u);
     });
-    return unsub;
+    return () => { sub?.subscription?.unsubscribe(); };
   }, []);
 
   // First-run onboarding — for a signed-in user with no profile yet.
@@ -1986,65 +2024,95 @@ function App() {
   }, [authReady, profile]);
 
   async function loadUserData(u) {
+    const email = (u.email || '').toLowerCase();
     // Shared-browser isolation: if the cache belongs to a different user, drop it (and reset state)
     // before anything can be shown or re-saved into this account.
-    if (storageGet(UID_KEY) !== u.uid) {
+    if (storageGet(UID_KEY) !== u.id) {
       clearLocalUserData();
       setMeals({}); setGoals(DEFAULT_GOALS); setProfile(null); setGame(seedGame({}));
       setSprites({}); spritesRef.current = {};
     }
-    storageSet(UID_KEY, u.uid);
+    storageSet(UID_KEY, u.id);
+    const sb = getSB();
     try {
-      const ref = firebase.firestore().collection('users').doc(u.uid);
-      const snap = await ref.get();
-      const d = snap.exists ? snap.data() : {};
-      // Firestore is authoritative for every account-scoped field. A brand-new account (no doc) or a
-      // cleared one (empty map) resets to defaults — never inherit whatever was cached locally.
-      const m = d.meals || {};
+      // Supabase is authoritative for every account-scoped field — never inherit local cache.
+      const { data: prof, error: pErr } = await sb.from('profiles').select('goals,profile,game').eq('email', email).maybeSingle();
+      if (pErr) throw pErr;
+      setGoals(prof?.goals || DEFAULT_GOALS); storageSet(GOALS_KEY, prof?.goals || DEFAULT_GOALS);
+      setProfile(prof?.profile || null);      storageSet(PROFILE_KEY, prof?.profile || null);
+      // Meals are individual rows now — rebuild the day-bucketed { dateKey: [meal] } map the UI expects.
+      const { data: rows, error: mErr } = await sb.from('meals').select('*').eq('email', email);
+      if (mErr) throw mErr;
+      const m = {};
+      for (const r of rows || []) { (m[r.date_key] = m[r.date_key] || []).push(rowToMeal(r)); }
+      for (const k of Object.keys(m)) m[k].sort((a, b) => (a.loggedAt || a.id) - (b.loggedAt || b.id));
       setMeals(m); storageSet(MEALS_KEY, m);
-      setGoals(d.goals || DEFAULT_GOALS); storageSet(GOALS_KEY, d.goals || DEFAULT_GOALS);
-      setProfile(d.profile || null); storageSet(PROFILE_KEY, d.profile || null);
-      const g = d.game || seedGame(m);
+      const g = prof?.game || seedGame(m);
       setGame(g); storageSet(GAME_KEY, g);
-      // Load the sprite subcollection into the store (kept out of the main doc). Replace, don't merge,
-      // so a fresh account never inherits a prior user's cached sprites.
-      const sprSnap = await ref.collection('sprites').get();
+      // Sprites: bytes live in Storage; sign short-lived URLs for this user's sprites for <img src>.
+      const { data: sprRows } = await sb.from('sprites').select('sprite_id,storage_path').eq('email', email);
       const merged = {};
-      sprSnap.forEach(doc => { const v = doc.data(); if (v && v.data) merged[doc.id] = v.data; });
+      if (sprRows && sprRows.length) {
+        const { data: signed } = await sb.storage.from('sprites').createSignedUrls(sprRows.map(s => s.storage_path), 60 * 60 * 24 * 7);
+        const byPath = {};
+        (signed || []).forEach(s => { if (s && s.signedUrl && !s.error) byPath[s.path] = s.signedUrl; });
+        for (const s of sprRows) { const url = byPath[s.storage_path]; if (url) merged[s.sprite_id] = url; }
+      }
       spritesRef.current = merged; setSprites(merged); storageSet(SPRITES_KEY, merged);
-    } catch(e) { console.error('[Firestore] Load failed:', e); }
-    loadedUidRef.current = u.uid;   // saves are now safe for this account
+    } catch(e) { console.error('[Supabase] Load failed:', e && e.message, e); }
+    loadedUidRef.current = u.id;   // saves are now safe for this account
   }
 
-  function scheduleFirestoreSave() {
-    clearTimeout(firestoreSaveRef.current);
-    firestoreSaveRef.current = setTimeout(async () => {
-      const { meals, goals, profile, game, user: u } = latestRef.current || {};
-      if (!u || !isFirebaseConfigured()) return;
-      if (loadedUidRef.current !== u.uid) return;   // this account's data hasn't loaded yet
-      // Strip pendingPhoto (a local-only regeneration fallback) so it never counts against
-      // the 1 MiB document limit — the sprite itself lives in its own subcollection.
-      const cleanMeals = {};
-      for (const [k, arr] of Object.entries(meals || {})) {
-        cleanMeals[k] = (arr || []).map(({ pendingPhoto, ...rest }) => rest);
-      }
+  // Who to write as, iff this account's data has finished loading. Returns null to gate saves.
+  function saveOwner() {
+    const u = latestRef.current?.user, sb = getSB();
+    if (!u || !sb || loadedUidRef.current !== u.id) return null;
+    return { sb, email: (u.email || '').toLowerCase(), uid: u.id };
+  }
+
+  // Meal persistence is now per-row: one insert / delete / update per meal — no whole-history rewrite.
+  function saveMealRow(dateKey, meal) {
+    const o = saveOwner(); if (!o) return;
+    const { pendingPhoto, ...clean } = meal;   // pendingPhoto is a local-only regeneration fallback
+    o.sb.from('meals').upsert(mealToRow(dateKey, clean, o.email, o.uid), { onConflict: 'email,client_id' })
+      .then(({ error }) => { if (error) { console.error('[Supabase] meal save failed:', error.message, error); setSaveError(true); } else setSaveError(false); });
+  }
+  function deleteMealRow(id) {
+    const o = saveOwner(); if (!o) return;
+    o.sb.from('meals').delete().eq('email', o.email).eq('client_id', id)
+      .then(({ error }) => { if (error) { console.error('[Supabase] meal delete failed:', error.message, error); setSaveError(true); } });
+  }
+  function updateMealRow(id, patch) {
+    const o = saveOwner(); if (!o) return;
+    o.sb.from('meals').update(patchToCols(patch)).eq('email', o.email).eq('client_id', id)
+      .then(({ error }) => { if (error) { console.error('[Supabase] meal update failed:', error.message, error); setSaveError(true); } });
+  }
+
+  // Profile row (goals + body profile + game) is a single small row — debounced upsert is fine.
+  function scheduleProfileSave() {
+    clearTimeout(profileSaveRef.current);
+    profileSaveRef.current = setTimeout(async () => {
+      const { goals, profile, game } = latestRef.current || {};
+      const o = saveOwner(); if (!o) return;
       try {
-        await firebase.firestore().collection('users').doc(u.uid).set({ meals: cleanMeals, goals, profile: profile || null, game: game || null });
+        const { error } = await o.sb.from('profiles').upsert(
+          { email: o.email, user_id: o.uid, goals, profile: profile || null, game: game || null, updated_at: new Date().toISOString() },
+          { onConflict: 'email' });
+        if (error) throw error;
         setSaveError(false);
       } catch(e) {
-        // Surface the failure instead of swallowing it: the user sees a banner, and the real
-        // error (code + message) lands in the console so an affected session is self-diagnosing.
-        console.error('[Firestore] Save failed:', e && e.code, '—', e && e.message, e);
+        console.error('[Supabase] Profile save failed:', e && e.message, e);
         setSaveError(true);
       }
     }, 1500);
   }
 
-  // Persist to localStorage; schedule Firestore save on any data change
-  useEffect(() => { storageSet(MEALS_KEY, meals); scheduleFirestoreSave(); }, [meals]);
-  useEffect(() => { storageSet(GOALS_KEY, goals); scheduleFirestoreSave(); }, [goals]);
-  useEffect(() => { storageSet(PROFILE_KEY, profile); scheduleFirestoreSave(); }, [profile]);
-  useEffect(() => { storageSet(GAME_KEY, game); scheduleFirestoreSave(); }, [game]);
+  // Cache to localStorage. Meals persist per-row via add/delete/updateMeal below (not here);
+  // goals/profile/game persist via the debounced single-row profile upsert.
+  useEffect(() => { storageSet(MEALS_KEY, meals); }, [meals]);
+  useEffect(() => { storageSet(GOALS_KEY, goals); scheduleProfileSave(); }, [goals]);
+  useEffect(() => { storageSet(PROFILE_KEY, profile); scheduleProfileSave(); }, [profile]);
+  useEffect(() => { storageSet(GAME_KEY, game); scheduleProfileSave(); }, [game]);
 
   function addMeal(dateKey, meal) {
     const m = { ...meal, loggedAt: meal.loggedAt || Date.now() };
@@ -2057,6 +2125,7 @@ function App() {
 
     setMeals(prev => ({ ...prev, [dateKey]: [...(prev[dateKey] || []), m] }));
     setGame(prev => applyRewards(prev, XP_PER_MEAL + (hitsGoal ? GOAL_XP_BONUS : 0), COINS_PER_MEAL + (hitsGoal ? GOAL_COIN_BONUS : 0)));
+    saveMealRow(dateKey, m);   // persist this one meal as its own row
 
     // Trigger the eating animation on the home scene for a few seconds.
     clearTimeout(fedTimerRef.current);
@@ -2066,6 +2135,7 @@ function App() {
 
   function deleteMeal(dateKey, id) {
     setMeals(prev => ({ ...prev, [dateKey]: (prev[dateKey] || []).filter(m => m.id !== id) }));
+    deleteMealRow(id);
   }
 
   // Patch a meal by id across every day bucket. Also updates the open detail view so a
@@ -2077,22 +2147,18 @@ function App() {
       return next;
     });
     setDetailMeal(dm => (dm && dm.id === id ? { ...dm, ...patch } : dm));
+    updateMealRow(id, patch);
   }
 
   async function handleSignIn() {
-    if (!isFirebaseConfigured()) return;
-    const provider = new firebase.auth.GoogleAuthProvider();
-    try {
-      await firebase.auth().signInWithPopup(provider);
-    } catch(e) {
-      if (e.code === 'auth/popup-blocked' || e.code === 'auth/cancelled-popup-request') {
-        try { await firebase.auth().signInWithRedirect(provider); } catch(e2) { console.error(e2); }
-      } else if (e.code !== 'auth/popup-closed-by-user') { console.error(e); }
-    }
+    const sb = getSB(); if (!sb) return;
+    // OAuth redirect flow; Supabase returns to this origin and onAuthStateChange picks it up.
+    const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin } });
+    if (error) console.error('[Auth] sign-in failed:', error.message);
   }
 
   async function handleSignOut() {
-    await firebase.auth().signOut();
+    try { const sb = getSB(); if (sb) await sb.auth.signOut(); } catch(e) { console.error(e); }
     clearLocalUserData();
     try { window.localStorage.removeItem(UID_KEY); } catch {}
     setMeals({}); setGoals(DEFAULT_GOALS); setProfile(null); setGame(seedGame({}));
@@ -2111,7 +2177,7 @@ function App() {
     return () => { alive = false; };
   }, [user]);
 
-  // Spinner while Firebase checks auth state
+  // Spinner while Supabase checks auth state
   if (!authReady) {
     return React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#f9fafb' } },
       React.createElement('div', { style: { width: 36, height: 36, borderRadius: '50%', border: '3px solid #e5e7eb', borderTopColor: '#22c55e', animation: 'spin 0.8s linear infinite' } })

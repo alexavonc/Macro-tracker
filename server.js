@@ -6,9 +6,9 @@ const crypto = require('crypto');
 
 const PORT = process.env.PORT || 8080;
 
-// Firebase project auth domain — proxy /__/ requests here so Safari's
-// third-party cookie blocking doesn't break signInWithRedirect.
-const FIREBASE_AUTH_DOMAIN = 'macrotracker-b2d17.firebaseapp.com';
+// Supabase project — used to validate access tokens on the gated /api routes.
+const SUPABASE_URL  = process.env.SUPABASE_URL  || 'https://fpjqkmjtwnllmndxydta.supabase.co';
+const SUPABASE_ANON = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZwanFrbWp0d25sbG1uZHh5ZHRhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2ODkwNjksImV4cCI6MjEwNTI2NTA2OX0.Al3_zP8Xv-kWnrs6j8Ky90WwN_K0CQ5g6UFEBYpwR1A';
 
 const types = {
   '.html': 'text/html',
@@ -19,62 +19,43 @@ const types = {
   '.ico':  'image/x-icon',
 };
 
-// ── Auth: verify Firebase ID tokens (RS256) and enforce an email allowlist ──────
-// No external deps and no service-account secret: Firebase ID tokens are RS256 JWTs
-// signed by Google, verifiable against Google's public x509 certs + standard claims.
-const PROJECT_ID = FIREBASE_AUTH_DOMAIN.replace('.firebaseapp.com', '');
+// ── Auth: validate Supabase access tokens and enforce an email allowlist ────────
+// No new server secret: we ask Supabase's /auth/v1/user endpoint who a token belongs to
+// (200 => valid, unexpired, signed by the project), then check the email against the allowlist.
 const ALLOWED_EMAILS = new Set(
   (process.env.ALLOWED_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
 );
 
-let googleKeys = null, googleKeysExp = 0;
-function fetchGoogleKeys() {
-  if (googleKeys && Date.now() < googleKeysExp) return Promise.resolve(googleKeys);
+// Ask Supabase to resolve an access token to its user. Rejects on any non-200.
+function supabaseUser(token) {
   return new Promise((resolve, reject) => {
-    https.get('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com', r => {
-      let d = '';
-      r.on('data', c => d += c);
-      r.on('end', () => {
-        try {
-          googleKeys = JSON.parse(d);
-          const m = (r.headers['cache-control'] || '').match(/max-age=(\d+)/);
-          googleKeysExp = Date.now() + (m ? parseInt(m[1], 10) : 3600) * 1000;
-          resolve(googleKeys);
-        } catch (e) { reject(e); }
-      });
-    }).on('error', reject);
+    const u = new URL(SUPABASE_URL + '/auth/v1/user');
+    const r = https.request(
+      { hostname: u.hostname, path: u.pathname, method: 'GET',
+        headers: { apikey: SUPABASE_ANON, Authorization: 'Bearer ' + token } },
+      resp => {
+        let d = '';
+        resp.on('data', c => d += c);
+        resp.on('end', () => {
+          if (resp.statusCode !== 200) return reject(new Error('token rejected: ' + resp.statusCode));
+          try { resolve(JSON.parse(d)); } catch (e) { reject(e); }
+        });
+      }
+    );
+    r.on('error', reject);
+    r.end();
   });
 }
 
-const b64url     = s => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
-const b64urlJson = s => JSON.parse(b64url(s).toString('utf8'));
-
-async function verifyIdToken(token) {
-  const p = String(token).split('.');
-  if (p.length !== 3) throw new Error('malformed');
-  const header = b64urlJson(p[0]), payload = b64urlJson(p[1]);
-  if (header.alg !== 'RS256' || !header.kid) throw new Error('bad header');
-  const cert = (await fetchGoogleKeys())[header.kid];
-  if (!cert) throw new Error('unknown kid');
-  const pub = new crypto.X509Certificate(cert).publicKey;
-  if (!crypto.verify('RSA-SHA256', Buffer.from(p[0] + '.' + p[1]), pub, b64url(p[2]))) throw new Error('bad signature');
-  const now = Math.floor(Date.now() / 1000);
-  if (payload.exp <= now) throw new Error('expired');
-  if (payload.aud !== PROJECT_ID) throw new Error('bad aud');
-  if (payload.iss !== 'https://securetoken.google.com/' + PROJECT_ID) throw new Error('bad iss');
-  if (!payload.sub) throw new Error('no sub');
-  return payload;
-}
-
-// Resolve to the caller's email if their verified, allowlisted token checks out; else reject with a code.
+// Resolve to the caller's email if their token is valid and allowlisted; else reject with a code.
 async function authorize(req) {
   const m = (req.headers['authorization'] || '').match(/^Bearer (.+)$/);
   if (!m) throw Object.assign(new Error('sign-in required'), { code: 401 });
-  let payload;
-  try { payload = await verifyIdToken(m[1]); }
+  let user;
+  try { user = await supabaseUser(m[1]); }
   catch (e) { throw Object.assign(new Error('invalid token'), { code: 401 }); }
-  const email = (payload.email || '').toLowerCase();
-  if (!payload.email_verified || !email) throw Object.assign(new Error('unverified'), { code: 403 });
+  const email = (user.email || '').toLowerCase();
+  if (!email) throw Object.assign(new Error('unverified'), { code: 403 });
   if (!ALLOWED_EMAILS.has(email)) throw Object.assign(new Error('not allowlisted'), { code: 403 });
   return email;
 }
@@ -86,24 +67,6 @@ function denyAuth(res, err) {
 }
 
 http.createServer((req, res) => {
-
-  // Proxy Firebase auth handler so auth stays same-origin (fixes iOS Safari)
-  if (req.url.startsWith('/__/')) {
-    const headers = { ...req.headers, host: FIREBASE_AUTH_DOMAIN };
-    delete headers['connection'];
-    const proxyReq = https.request(
-      { hostname: FIREBASE_AUTH_DOMAIN, path: req.url, method: req.method, headers },
-      proxyRes => {
-        const outHeaders = { ...proxyRes.headers };
-        delete outHeaders['transfer-encoding'];
-        res.writeHead(proxyRes.statusCode, outHeaders);
-        proxyRes.pipe(res);
-      }
-    );
-    proxyReq.on('error', e => { console.error('[proxy]', e.message); res.writeHead(502); res.end(); });
-    req.pipe(proxyReq);
-    return;
-  }
 
   // Client gate: verify token + allowlist, return the email or 401/403.
   if (req.url === '/api/authorize' && req.method === 'POST') {
